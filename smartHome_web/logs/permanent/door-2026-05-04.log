@@ -1,0 +1,28 @@
+[12:35:57] [INFO] Cua da dong ← 192.168.1.11
+[12:47:59] [INFO] Mo cua boi: The tu (RFID)
+[12:48:04] [INFO] Dong cua (da mo boi: The tu (RFID))
+[12:48:07] [INFO] Mo cua boi: The tu (RFID)
+[12:48:12] [INFO] Dong cua (da mo boi: The tu (RFID))
+[12:54:51] [INFO] Mo cua boi: The tu (RFID)
+[12:54:51] [INFO] Cua da mo boi: The tu (RFID) ← 192.168.1.11
+[12:54:56] [INFO] Dong cua (da mo boi: The tu (RFID))
+[12:54:58] [INFO] Cua da dong ← 192.168.1.11
+[12:55:02] [WARN] He thong bi khoa 30s (qua so lan nhap sai)
+[12:55:03] [WARN] He thong bi khoa 30s ← 192.168.1.11
+[12:55:07] [INFO] Mo cua boi: Ung dung / Web
+[12:55:07] [INFO] Cua da mo boi: Ung dung / Web ← 192.168.1.11
+[12:55:12] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[12:55:12] [INFO] Cua da dong ← 192.168.1.11
+[12:59:27] [INFO] Mo cua boi: Ung dung / Web
+[12:59:27] [INFO] Cua da mo boi: Ung dung / Web ← 192.168.1.11
+[12:59:51] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[12:59:52] [INFO] Cua da dong ← 192.168.1.11
+[13:00:08] [WARN] He thong bi khoa 30s (qua so lan nhap sai)
+[13:00:09] [WARN] He thong bi khoa 30s ← 192.168.1.11
+[13:00:37] [INFO] Cua da dong ← 192.168.1.11
+[13:00:41] [WARN] He thong bi khoa 60s (qua so lan nhap sai)
+[13:00:44] [WARN] He thong bi khoa 60s ← 192.168.1.11
+[13:01:41] [INFO] Cua da dong ← 192.168.1.11
+[13:01:52] [WARN] He thong bi khoa 120s (qua so lan nhap sai)
+[13:01:54] [WARN] He thong bi khoa 120s ← 192.168.1.11
+[13:03:53] [INFO] Cua da dong ← 192.168.1.11

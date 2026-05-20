@@ -1,0 +1,92 @@
+<section class="card window-control">
+  <div class="card-head">
+    <div class="card-title"><span class="room-icon">⌁</span>Cửa sổ điều khiển</div>
+    <span id="door-chip" class="chip">Cửa: ---</span>
+  </div>
+  <div class="device-strip">
+    <div class="device-indicator" id="door-indicator">
+      <span class="device-dot"></span>
+      <div>
+        <span>Cửa chính</span>
+        <strong id="door-indicator-text">---</strong>
+      </div>
+    </div>
+    <div class="device-indicator" id="garage-indicator">
+      <span class="device-dot"></span>
+      <div>
+        <span>Gara</span>
+        <strong id="garage-indicator-text">---</strong>
+      </div>
+    </div>
+    <div class="device-indicator" id="light-indicator">
+      <span class="device-dot"></span>
+      <div>
+        <span>Đèn</span>
+        <strong id="light-indicator-text">---</strong>
+      </div>
+    </div>
+    <div class="device-indicator" id="fan-indicator">
+      <span class="device-dot"></span>
+      <div>
+        <span>Quạt</span>
+        <strong id="fan-indicator-text">---</strong>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="control-tile full">
+      <div class="tile-label">Cửa chính</div>
+      <div class="tile-value" id="door-state">---</div>
+      <label>Thời gian mở cửa (giây)
+        <input id="unlock-delay" type="number" min="1" max="600" value="5">
+      </label>
+      <button class="btn btn-primary" id="unlock-btn" data-command>Mở cửa chính</button>
+    </div>
+
+    <div class="control-tile">
+      <div class="tile-label">Gara</div>
+      <div class="tile-value" id="garage-state">---</div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="garage-open-btn" data-command>Mở</button>
+        <button class="btn" id="garage-close-btn" data-command>Đóng</button>
+      </div>
+    </div>
+
+    <div class="control-tile">
+      <div class="tile-label">Đèn hành lang</div>
+      <div class="tile-value" id="light-state">---</div>
+      <div class="mode-line">Chế độ: <strong id="light-mode">---</strong></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" data-light="on" data-command>Bật</button>
+        <button class="btn" data-light="off" data-command>Tắt</button>
+        <button class="btn" data-light="auto" data-command>Auto</button>
+      </div>
+    </div>
+
+    <div class="control-tile full">
+      <div class="tile-label">Quạt môi trường</div>
+      <div class="tile-value" id="fan-state">---</div>
+      <div class="mode-line">Chế độ: <strong id="fan-mode-state">---</strong></div>
+      <div class="form-grid">
+        <label>Chế độ
+          <select id="fan-mode">
+            <option value="auto">Tự động</option>
+            <option value="manual">Thủ công</option>
+            <option value="off">Tắt</option>
+          </select>
+        </label>
+        <label>Hướng
+          <select id="fan-dir">
+            <option value="1">Thuận</option>
+            <option value="-1">Ngược</option>
+            <option value="0">Tắt</option>
+          </select>
+        </label>
+        <label>Tốc độ (%)
+          <input id="fan-speed" type="number" min="0" max="100" value="60">
+        </label>
+      </div>
+      <button class="btn btn-primary" id="fan-apply-btn" data-command>Áp dụng quạt</button>
+    </div>
+  </div>
+</section>

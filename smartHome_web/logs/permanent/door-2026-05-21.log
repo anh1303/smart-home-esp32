@@ -1,0 +1,31 @@
+[00:10:11] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[00:10:12] [INFO] Cua da dong
+[00:11:26] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[00:11:26] [WARN] ESP32 ngat ket noi WebSocket
+[00:16:57] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[00:16:57] [INFO] Cua da dong
+[00:16:58] [INFO] Dong cua (da mo boi: The tu (RFID))
+[00:16:58] [INFO] Mo cua boi: The tu (RFID)
+[00:16:58] [INFO] Mo cua boi: The tu (RFID)
+[00:16:58] [INFO] Dong cua (da mo boi: The tu (RFID))
+[00:23:09] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[00:23:10] [INFO] Cua da dong
+[00:23:40] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[00:23:40] [INFO] Cua da dong
+[00:26:05] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[00:26:05] [INFO] Cua da dong
+[00:28:23] [INFO] Web lenh MO cong gara
+[00:28:24] [INFO] Cong gara mo - phat hien boi: Ung dung / Web
+[00:28:26] [INFO] Web lenh DONG cong gara
+[00:28:36] [INFO] Cua da mo (nguon khong xac dinh)
+[00:28:36] [INFO] Mo cua boi: Ung dung / Web
+[00:28:41] [INFO] Cua da dong (da mo boi: Ung dung / Web)
+[00:28:41] [INFO] Dong cua
+[00:29:12] [INFO] Cua da mo (nguon khong xac dinh)
+[00:29:12] [INFO] Mo cua boi: The tu (RFID)
+[00:29:42] [INFO] Dong cua (da mo boi: The tu (RFID))
+[00:29:42] [INFO] Cua da dong
+[00:29:57] [INFO] Cong gara mo - phat hien boi: The Gara
+[00:30:48] [INFO] Cong gara mo - phat hien boi: The Gara
+[00:31:23] [INFO] Cong gara mo - phat hien boi: The Gara
+[00:31:31] [INFO] Web lenh DONG cong gara
