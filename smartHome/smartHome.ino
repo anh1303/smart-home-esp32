@@ -11,6 +11,14 @@
 #include <ArduinoJson.h>       // [V4.0] parse lệnh JSON từ server
 #include <Preferences.h>
 
+// ── FORWARD DECLARATION ───────────
+struct LocalAccessItem;
+
+bool localAccessAllowed(const LocalAccessItem &item);
+LocalAccessItem* findLocalPassword(const String &pin);
+LocalAccessItem* findLocalCard(const String &uid);
+void fillAccessItem(LocalAccessItem &item, JsonObject obj, bool isCard);
+
 // ── CHẾ ĐỘ HOẠT ĐỘNG ─────────────────────────────────────────────────
 // Doi dong NETWORK_MODE ben duoi de chon che do:
 //   MODE_ONLINE_WS    : ket noi WiFi/WebSocket va van chay logic tu dong.
@@ -85,9 +93,11 @@ static const unsigned long WIFI_CHECK_INTV   = 10000;
 static const unsigned long DHT_INTERVAL      = 2000;
 static const unsigned long SONAR_INTERVAL    = 100;
 static const unsigned long STATUS_INTERVAL   = 20000;
+static const unsigned long CONFIG_SYNC_INTERVAL = 3600000UL; // 1 gio moi hoi server 1 lan, ngoai tru luc ket noi lai
 static const unsigned long STATUS_DIRTY_MIN_INTERVAL = 1500;
-static const unsigned long COMMAND_COOLDOWN  = 800;
-static const unsigned long GARA_CLOSE_DELAY  = 5000;
+static const unsigned long COMMAND_COOLDOWN  = 500;
+static const unsigned long DEFAULT_AUTO_CLOSE_MS = 30000;
+static unsigned long       garaCloseDelay     = DEFAULT_AUTO_CLOSE_MS; // Dung chung voi thoi gian tu dong dong cua
 static const int           MAX_FAILS         = 3;
 static const int           MAX_INPUT_LEN     = 16;
 static const int           MIN_PASS_LEN      = 4;
@@ -95,6 +105,7 @@ static float               fanTempOnThresh   = 35.0f;
 static float               fanHumOnThresh    = 40.0f;
 static float               fanTempHyst       = 2.0f;
 static float               fanHumHyst        = 5.0f;
+static int                 fanAutoSpeedPct   = 60; // Toc do tuy chinh khi quat o che do tu dong
 static const int           FAN_PWM_MIN       = 100;
 static const int           FAN_PWM_MAX       = 255;
 static const float         FAN_TEMP_SCALE    = 10.0f;
@@ -107,7 +118,6 @@ static const int           IR_ACTIVE_LEVEL   = LOW;
 static unsigned long       pirOffDelay       = 5000;
 static int                 lightBrightness   = 100;
 static String              lightEffect       = "static";
-static const unsigned long DOOR_FAST_CLOSE   = 1000;
 
 // ── STATE MACHINE ─────────────────────────────────────────────────────
 enum SystemState {
@@ -127,7 +137,7 @@ char          garageCardUID[16]   = "23 C0 EB 0C";
 
 bool          isDoorOpen             = false;
 unsigned long doorOpenTime           = 0;
-unsigned long openDuration           = 5000;
+unsigned long openDuration           = DEFAULT_AUTO_CLOSE_MS;
 bool          keypadActive           = false;
 unsigned long lastKeyPressTime       = 0;
 int           failedAttempts         = 0;
@@ -153,8 +163,8 @@ unsigned long sonarTimer   = 0;
 unsigned long lcdIdleTimer = 0;
 bool          lcdLine2Alt  = false;
 
-// [V4.0-F2] Quạt manual mode
-bool          fanManualMode = false;  // true = web đang điều khiển quạt
+// [V4.0-F2] Chế độ quạt: false = Tự động, true = Bật/Tắt từ web
+bool          fanManualMode = false;  // true = web dang dieu khien quat o che do Bat/Tat
 
 // [V4.0-F3] Đèn hành lang manual override
 bool          ledManualOverride = false; // true = web đang điều khiển LED
@@ -171,6 +181,9 @@ unsigned long pirOffTime     = 0;
 bool          doorByAuth        = false;
 bool          doorPassDetected  = false;
 int           sonarConfirmCount = 0;
+unsigned long fanOnStartedAt    = 0;
+int           lastDoorRemainingSeconds = -1;
+int           lastGaraRemainingSeconds = -1;
 
 // [V4.0-WS1] WebSocket state
 bool          wsConnected       = false;
@@ -191,20 +204,61 @@ String        authPendingTarget    = "";
 unsigned long authRequestAt        = 0;
 static const unsigned long AUTH_TIMEOUT = 5000;
 
+
+// ── LOCAL CONFIG CACHE / ACCESS CONTROL ─────────────────────────────
+// ESP32 xác thực nhanh bằng cache trong RAM + Preferences.
+static const int MAX_LOCAL_CARDS = 20;
+static const int MAX_LOCAL_PASSES = 12;
+
+struct LocalAccessItem {
+    bool enabled;
+    char credential[24];     // UID RFID hoặc PIN keypad
+    char target[16];         // "mainDoor" | "garageDoor"
+    char source[16];         // "The Tu" | "The Gara" | "Mat Khau" | "Khach(OTP)"
+    char accessType[16];     // "full_time" | "time_window" | "date_range"
+    int  startMinute;        // dùng cho time_window
+    int  endMinute;          // dùng cho time_window
+    unsigned long long validFromMs;
+    unsigned long long validUntilMs;
+    unsigned long long expiresAtMs;
+    int autoCloseSeconds;
+};
+
+LocalAccessItem localCards[MAX_LOCAL_CARDS];
+LocalAccessItem localPasses[MAX_LOCAL_PASSES];
+int localCardCount = 0;
+int localPassCount = 0;
+
+bool timeSynced = false;
+unsigned long long serverEpochMs = 0;
+unsigned long serverEpochSetAt = 0;
+unsigned long configVersion = 0;
+
+String lastConfigJson = "";
+bool accessConfigSynced = false;
+unsigned long lastConfigRequestAt = 0;
+
 // ── NOTIFY QUEUE (gửi event qua WebSocket, không blocking) ───────────
-struct NotifyJob { bool pending; char type[24]; char source[24]; };
+struct NotifyJob { bool pending; char type[24]; char source[24]; unsigned long durationMs; };
 static NotifyJob notifyQueue[8];
 static int notifyHead = 0, notifyTail = 0;
 
-void scheduleNotify(const char *type, const char *source) {
+void scheduleNotifyWithDuration(const char *type, const char *source, unsigned long durationMs = 0) {
     if (!networkEnabled()) return;
 
     int next = (notifyTail + 1) % 8;
     if (next == notifyHead) return;
     strncpy(notifyQueue[notifyTail].type,   type,   23);
     strncpy(notifyQueue[notifyTail].source, source, 23);
+    notifyQueue[notifyTail].type[23] = '\0';
+    notifyQueue[notifyTail].source[23] = '\0';
+    notifyQueue[notifyTail].durationMs = durationMs;
     notifyQueue[notifyTail].pending = true;
     notifyTail = next;
+}
+
+void scheduleNotify(const char *type, const char *source) {
+    scheduleNotifyWithDuration(type, source, 0);
 }
 
 // [V4.0] flushNotify gửi qua WebSocket thay vì HTTP POST
@@ -220,11 +274,242 @@ void flushNotify() {
     body += job.type;
     body += "\",\"source\":\"";
     body += job.source;
-    body += "\"}";
+    body += "\"";
+    if (job.durationMs > 0) {
+        body += ",\"durationMs\":";
+        body += String(job.durationMs);
+    }
+    body += "}";
     wsClient.sendTXT(body);
 
     job.pending = false;
     notifyHead  = (notifyHead + 1) % 8;
+}
+
+
+void applyFanAutoNow(bool force = false);
+void applyLightConfigNow();
+
+// ── LOCAL CONFIG HELPERS ─────────────────────────────────────────────
+unsigned long long nowEpochMs() {
+    if (!timeSynced) return 0;
+    return serverEpochMs + (unsigned long long)(millis() - serverEpochSetAt);
+}
+
+int currentMinuteOfDay() {
+    unsigned long long nowMs = nowEpochMs();
+    if (nowMs == 0) return -1;
+    unsigned long totalMinutes = (unsigned long)((nowMs / 60000ULL) % 1440ULL);
+    return (int)((totalMinutes + 7 * 60) % 1440); // Asia/Ho_Chi_Minh UTC+7
+}
+
+void normalizeUidString(String &uid) {
+    uid.trim();
+    uid.toUpperCase();
+    uid.replace(":", " ");
+    uid.replace("-", " ");
+    while (uid.indexOf("  ") != -1) uid.replace("  ", " ");
+}
+
+void clearLocalAccessCache() {
+    memset(localCards, 0, sizeof(localCards));
+    memset(localPasses, 0, sizeof(localPasses));
+    localCardCount = 0;
+    localPassCount = 0;
+}
+
+bool localAccessAllowed(const LocalAccessItem &item) {
+    if (!item.enabled) return false;
+    unsigned long long nowMs = nowEpochMs();
+
+    if (item.expiresAtMs > 0) {
+        if (!timeSynced || nowMs >= item.expiresAtMs) return false;
+    }
+
+    if (strcmp(item.accessType, "time_window") == 0) {
+        int nowMin = currentMinuteOfDay();
+        if (nowMin < 0) return false;
+        int start = item.startMinute;
+        int end   = item.endMinute;
+        if (start < 0 || end < 0 || start > 1439 || end > 1439) return false;
+        bool inside = (start <= end) ? (nowMin >= start && nowMin <= end)
+                                     : (nowMin >= start || nowMin <= end);
+        return inside;
+    }
+
+    if (strcmp(item.accessType, "date_range") == 0) {
+        if (!timeSynced) return false;
+        if (item.validFromMs > 0 && nowMs < item.validFromMs) return false;
+        if (item.validUntilMs > 0 && nowMs > item.validUntilMs) return false;
+        return true;
+    }
+
+    return true; // full_time hoặc không khai báo
+}
+
+LocalAccessItem* findLocalPassword(const String &pin) {
+    for (int i = 0; i < localPassCount; i++) {
+        if (strcmp(localPasses[i].target, "mainDoor") == 0
+            && pin == String(localPasses[i].credential)) {
+            return &localPasses[i];
+        }
+    }
+    return nullptr;
+}
+
+LocalAccessItem* findLocalCard(const String &uid) {
+    for (int i = 0; i < localCardCount; i++) {
+        if (uid == String(localCards[i].credential)) return &localCards[i];
+    }
+    return nullptr;
+}
+
+void fillAccessItem(LocalAccessItem &item, JsonObject obj, bool isCard) {
+    memset(&item, 0, sizeof(item));
+    item.enabled = obj["enabled"] | true;
+
+    String cred = isCard ? String((const char*)(obj["uid"] | ""))
+                         : String((const char*)(obj["pin"] | ""));
+    if (isCard) normalizeUidString(cred);
+    cred.toCharArray(item.credential, sizeof(item.credential));
+
+    const char *target = obj["target"] | "mainDoor";
+    strncpy(item.target, target, sizeof(item.target) - 1);
+
+    const char *source = obj["source"] | (isCard
+        ? (strcmp(target, "garageDoor") == 0 ? "The Gara" : "The Tu")
+        : ((strcmp(obj["type"] | "", "master") == 0) ? "Mat Khau" : "Khach(OTP)"));
+    strncpy(item.source, source, sizeof(item.source) - 1);
+
+    const char *accessType = obj["accessType"] | "full_time";
+    strncpy(item.accessType, accessType, sizeof(item.accessType) - 1);
+    item.startMinute = obj["startMinute"] | -1;
+    item.endMinute   = obj["endMinute"]   | -1;
+    item.validFromMs = obj["validFromMs"] | 0ULL;
+    item.validUntilMs = obj["validUntilMs"] | 0ULL;
+    item.expiresAtMs = obj["expiresAtMs"] | 0ULL;
+    item.autoCloseSeconds = obj["autoCloseSeconds"] | 30;
+}
+
+void requestConfigSync(bool force = false) {
+    if (!networkEnabled() || !wsConnected) return;
+    String body = "{\"type\":\"config_request\",\"version\":" + String(configVersion);
+    if (force) body += ",\"force\":true,\"reason\":\"connect\"";
+    body += "}";
+    wsClient.sendTXT(body);
+    lastConfigRequestAt = millis();
+}
+
+bool setAutoCloseSeconds(int sec) {
+    if (sec < 1 || sec > 600) return false;
+    unsigned long ms = (unsigned long)sec * 1000UL;
+    openDuration = ms;
+    garaCloseDelay = ms;
+    prefs.putULong("auto_close_s", (unsigned long)sec);
+    statusDirty = true;
+    return true;
+}
+
+void saveConfigJsonToPrefs(const String &json) {
+    if (json.length() == 0 || json.length() > 12000) return;
+    prefs.putString("cfg_json", json);
+}
+
+bool applyConfigJson(const String &json, bool persist) {
+    DynamicJsonDocument doc(12288);
+    DeserializationError err = deserializeJson(doc, json);
+    if (err) return false;
+
+    unsigned long incomingVersion = doc["version"] | 0UL;
+    if (incomingVersion > 0 && configVersion > 0 && incomingVersion < configVersion) return false;
+    if (incomingVersion > 0) configVersion = incomingVersion;
+
+    unsigned long long nowMs = doc["nowMs"] | 0ULL;
+    if (nowMs > 0) {
+        serverEpochMs = nowMs;
+        serverEpochSetAt = millis();
+        timeSynced = true;
+    }
+
+    if (doc.containsKey("autoCloseSeconds")) {
+        int sec = doc["autoCloseSeconds"] | 30;
+        setAutoCloseSeconds(sec);
+    } else {
+        if (doc.containsKey("doorOpenSeconds")) {
+            int sec = doc["doorOpenSeconds"] | 30;
+            setAutoCloseSeconds(sec);
+        }
+        if (doc.containsKey("garageCloseSeconds")) {
+            int sec = doc["garageCloseSeconds"] | 30;
+            setAutoCloseSeconds(sec);
+        }
+    }
+
+    if (doc.containsKey("fan")) {
+        JsonObject f = doc["fan"];
+        float tempOn = f["tempOn"] | fanTempOnThresh;
+        float tempOff = f["tempOff"] | (fanTempOnThresh - fanTempHyst);
+        float humOn = f["humOn"] | fanHumOnThresh;
+        float humOff = f["humOff"] | (fanHumOnThresh + fanHumHyst);
+        if (tempOff < tempOn && humOff > humOn) {
+            fanTempOnThresh = tempOn;
+            fanTempHyst = tempOn - tempOff;
+            fanHumOnThresh = humOn;
+            fanHumHyst = humOff - humOn;
+        }
+        int autoSpeed = f["autoSpeed"] | f["speed"] | fanAutoSpeedPct;
+        if (autoSpeed >= 1 && autoSpeed <= 100) fanAutoSpeedPct = autoSpeed;
+    }
+
+    if (doc.containsKey("light")) {
+        JsonObject l = doc["light"];
+        int holdSec = l["holdSeconds"] | (int)(pirOffDelay / 1000UL);
+        int brightness = l["brightness"] | lightBrightness;
+        const char *effect = l["effect"] | lightEffect.c_str();
+        if (holdSec >= 1 && holdSec <= 600) pirOffDelay = (unsigned long)holdSec * 1000UL;
+        if (brightness >= 10 && brightness <= 100) lightBrightness = brightness;
+        String e = String(effect); e.trim(); e.toLowerCase();
+        if (e == "static" || e == "blink" || e == "fading") lightEffect = e;
+    }
+
+    clearLocalAccessCache();
+    if (doc.containsKey("cards")) {
+        JsonArray cards = doc["cards"].as<JsonArray>();
+        for (JsonObject card : cards) {
+            if (localCardCount >= MAX_LOCAL_CARDS) break;
+            fillAccessItem(localCards[localCardCount], card, true);
+            if (strlen(localCards[localCardCount].credential) > 0) localCardCount++;
+        }
+    }
+    if (doc.containsKey("passwords")) {
+        JsonArray passes = doc["passwords"].as<JsonArray>();
+        for (JsonObject pass : passes) {
+            if (localPassCount >= MAX_LOCAL_PASSES) break;
+            fillAccessItem(localPasses[localPassCount], pass, false);
+            if (strlen(localPasses[localPassCount].credential) >= MIN_PASS_LEN) localPassCount++;
+        }
+    }
+
+    // Config server la nguon chinh: moi lan sync se xoa cache cu, ghi de RAM + Preferences.
+    accessConfigSynced = doc.containsKey("cards") || doc.containsKey("passwords");
+
+    applyFanAutoNow(true);
+    applyLightConfigNow();
+
+    if (persist) {
+        lastConfigJson = json;
+        saveConfigJsonToPrefs(json);
+        prefs.putULong("cfg_version", configVersion);
+    }
+
+    statusDirty = true;
+    return true;
+}
+
+void loadConfigFromPrefs() {
+    configVersion = prefs.getULong("cfg_version", 0);
+    String json = prefs.getString("cfg_json", "");
+    if (json.length() > 0) applyConfigJson(json, false);
 }
 
 // ── TIỆN ÍCH ─────────────────────────────────────────────────────────
@@ -325,11 +610,8 @@ void updateLcdLine0() {
 }
 
 // ── ĐIỀU KHIỂN QUẠT ──────────────────────────────────────────────────
-int calcFanDuty(float deviation, float scale) {
-    float ratio = constrain(deviation / scale, 0.0f, 1.0f);
-    return (int)(FAN_PWM_MIN + ratio * (FAN_PWM_MAX - FAN_PWM_MIN));
-}
-
+// Chế độ Tự động chỉ quyết định BẬT/TẮT và hướng quay theo ngưỡng.
+// Tốc độ PWM không tự tính theo độ lệch nhiệt/ẩm nữa, mà dùng fanAutoSpeedPct do web/server gửi xuống.
 int fanDutyToPercent() {
     if (fanDir == 0 || fanSpeed <= 0) return 0;
     if (fanSpeed <= FAN_PWM_MIN) return 1;
@@ -348,6 +630,7 @@ int fanPercentToDuty(int pct) {
 
 void setFan(int dir, int duty = FAN_PWM_MAX) {
     bool changed = (fanDir != dir) || (fanSpeed != (dir != 0 ? duty : 0));
+    bool wasOn = fanDir != 0;
     fanDir   = dir;
     fanOn    = (dir != 0);
     fanSpeed = fanOn ? duty : 0;
@@ -355,6 +638,11 @@ void setFan(int dir, int duty = FAN_PWM_MAX) {
     else if (dir == -1) { digitalWrite(FAN_IN1, LOW);  digitalWrite(FAN_IN2, HIGH); }
     else                { digitalWrite(FAN_IN1, LOW);  digitalWrite(FAN_IN2, LOW);  }
     ledcWrite(FAN_ENA, fanSpeed);
+    if (!wasOn && fanOn) fanOnStartedAt = millis();
+    if (wasOn && !fanOn && fanOnStartedAt > 0) {
+        scheduleNotifyWithDuration("fan_off", "duration", millis() - fanOnStartedAt);
+        fanOnStartedAt = 0;
+    }
     if (changed) statusDirty = true;
 }
 
@@ -366,6 +654,65 @@ void setFanPercent(int dir, int pct) {
     }
     int duty = fanPercentToDuty(pct);
     setFan(dir, duty);
+}
+
+
+void applyFanAutoNow(bool force) {
+    // fanManualMode = true nghĩa là web đang ở chế độ Bật/Tắt.
+    // fanManualMode = false nghĩa là chế độ Tự động: dùng ngưỡng để quyết định trạng thái,
+    // nhưng tốc độ chạy vẫn là tốc độ tùy chỉnh fanAutoSpeedPct.
+    if (fanManualMode) return;
+
+    int shouldDir  = 0;
+    int shouldDuty = 0;
+    int autoDuty   = fanPercentToDuty(fanAutoSpeedPct);
+
+    if (force) {
+        // Khi vừa đổi ngưỡng/tốc độ hoặc vừa chuyển từ Bật/Tắt sang Tự động,
+        // tính lại ngay từ cảm biến hiện tại. Tốc độ chạy là tốc độ người dùng đặt,
+        // không tự tăng/giảm theo độ lệch nhiệt độ/độ ẩm.
+        if (temperature > fanTempOnThresh) {
+            shouldDir  = 1;
+            shouldDuty = autoDuty;
+        } else if (humidity > 0.0f && humidity < fanHumOnThresh) {
+            shouldDir  = -1;
+            shouldDuty = autoDuty;
+        }
+    } else {
+        shouldDir  = fanDir;
+        shouldDuty = fanDir != 0 ? autoDuty : 0;
+
+        if (temperature > fanTempOnThresh) {
+            shouldDir  = 1;
+            shouldDuty = autoDuty;
+        } else if (fanDir == 1 && temperature < fanTempOnThresh - fanTempHyst) {
+            shouldDir = 0; shouldDuty = 0;
+        } else if (fanDir == 1) {
+            shouldDuty = autoDuty;
+        } else if (humidity > 0.0f && humidity < fanHumOnThresh) {
+            shouldDir  = -1;
+            shouldDuty = autoDuty;
+        } else if (fanDir == -1 && humidity > fanHumOnThresh + fanHumHyst) {
+            shouldDir = 0; shouldDuty = 0;
+        } else if (fanDir == -1 && humidity > 0.0f) {
+            shouldDuty = autoDuty;
+        }
+    }
+
+    bool dirChanged = shouldDir != fanDir;
+    setFan(shouldDir, shouldDuty);
+    if (dirChanged) {
+        if (shouldDir == 1)       scheduleNotify("fan", "heat_fwd");
+        else if (shouldDir == -1) scheduleNotify("fan", "hum_rev");
+        else                      scheduleNotify("fan", "off");
+    }
+}
+
+void applyLightConfigNow() {
+    lightFadeDuty = lightBrightnessToDuty();
+    lightFadeDir = -1;
+    lightEffectTimer = millis();
+    if (pirLightState) applyPirLightOutput(true);
 }
 
 // ── SMARTLOCK: KHÓA / MỞ CỬA ─────────────────────────────────────────
@@ -381,22 +728,35 @@ void lockDoor() {
     doorByAuth        = false;
     doorPassDetected  = false;
     sonarConfirmCount = 0;
-    openDuration      = 5000;
+    // Khong reset openDuration o day de giu cau hinh sync tu server.
     sDoor.write(DOOR_CLOSE_ANGLE);
     showIdleScreen();
     if (wasOpen) {
-        scheduleNotify("close", "auto");
+        scheduleNotifyWithDuration("close", "auto", millis() - doorOpenTime);
         statusDirty = true;
     }
 }
 
-void triggerOpenDoor(const char *source) {
-    if (isDoorOpen) return;
-    lockoutCount           = 0;
+
+void resetAuthFailureCounter() {
+    failedAttempts = 0;
+    lockoutCount = 0;
     currentLockoutDuration = 30000;
+    if (sysState == MODE_LOCKOUT) sysState = MODE_NORMAL;
+}
+
+void triggerOpenDoor(const char *source) {
+    // Lockout là khóa bảo mật chung cho cả cửa chính và gara.
+    // Không cho bất kỳ xác thực nào mở cửa trong thời gian lockout,
+    // trừ lệnh unlock/reset lockout từ Web/App được xử lý riêng trong handleWsCommand().
+    if (sysState == MODE_LOCKOUT) {
+        statusDirty = true;
+        return;
+    }
+    if (isDoorOpen) return;
+    resetAuthFailureCounter();
     isDoorOpen     = true;
     sysState       = MODE_NORMAL;
-    failedAttempts = 0;
     doorOpenTime   = millis();
     keypadActive   = false;
     displayUntil   = 0;
@@ -467,14 +827,22 @@ void storeCardUid(const char *key, const String &uid, char *dest, size_t destSiz
 
 void closeGarage(const char *source) {
     if (!garaOpen) return;
+    unsigned long duration = millis() - garaOpenTime;
     sGara.write(GARA_CLOSE_ANGLE);
     garaOpen = false;
-    scheduleNotify("gara_close", source);
+    scheduleNotifyWithDuration("gara_close", source, duration);
     if (!isDoorOpen && !keypadActive) showIdleScreen();
     statusDirty = true;
 }
 
 void openGarage(const char *source) {
+    // Lockout dùng chung: khi bị khóa, gara cũng không được mở/gia hạn
+    // bằng RFID, siêu âm, server auth result hoặc lệnh web mở gara.
+    if (sysState == MODE_LOCKOUT) {
+        statusDirty = true;
+        return;
+    }
+    resetAuthFailureCounter();
     if (garaOpen) {
         garaOpenTime = millis();
         return;
@@ -531,8 +899,18 @@ void pushStatus(bool force = false) {
                     ? ledManualState
                     : getPirLightState();
     long dist     = lastDistanceCm;
+    long doorRemainingSeconds = isDoorOpen
+        ? (long)((openDuration > (millis() - doorOpenTime))
+            ? (openDuration - (millis() - doorOpenTime) + 999UL) / 1000UL
+            : 0)
+        : 0;
+    long garaRemainingSeconds = garaOpen
+        ? (long)((garaCloseDelay > (millis() - garaOpenTime))
+            ? (garaCloseDelay - (millis() - garaOpenTime) + 999UL) / 1000UL
+            : 0)
+        : 0;
 
-    char buf[448];
+    char buf[620];
     snprintf(buf, sizeof(buf),
         "{\"type\":\"status\","
         "\"door\":\"%s\","
@@ -543,12 +921,16 @@ void pushStatus(bool force = false) {
         "\"garageMode\":\"%s\","
         "\"fan\":\"%s\","
         "\"fanPct\":%d,"
+        "\"fanAutoPct\":%d,"
         "\"fanMode\":\"%s\","
         "\"light\":%s,"
         "\"lightMode\":\"%s\","
         "\"lightBrightness\":%d,"
         "\"lightEffect\":\"%s\","
         "\"lightHold\":%lu,"
+        "\"autoCloseSeconds\":%lu,"
+        "\"doorRemainingSeconds\":%ld,"
+        "\"garaRemainingSeconds\":%ld,"
         "\"dist\":%ld}",
         (sysState == MODE_LOCKOUT) ? "LOCKED_OUT"
             : isDoorOpen ? "OPEN" : "CLOSED",
@@ -559,12 +941,16 @@ void pushStatus(bool force = false) {
         garaManualMode ? "MANUAL" : "AUTO",
         fanDir == 1 ? "FORWARD" : fanDir == -1 ? "REVERSE" : "OFF",
         pct,
+        fanAutoSpeedPct,
         fanManualMode ? "MANUAL" : "AUTO",
         ledState ? "true" : "false",
         ledManualOverride ? "MANUAL" : "AUTO",
         lightBrightness,
         lightEffect.c_str(),
         pirOffDelay / 1000UL,
+        openDuration / 1000UL,
+        doorRemainingSeconds,
+        garaRemainingSeconds,
         dist
     );
     wsClient.sendTXT(buf);
@@ -580,6 +966,24 @@ void pushStatusIfDirty() {
 void pushStatusIfPeriodicDue() {
     if (!networkEnabled() || !wsConnected) return;
     if (millis() - lastStatusPush >= STATUS_INTERVAL) pushStatus();
+}
+
+void markCountdownStatusDirtyIfNeeded() {
+    int doorRemaining = isDoorOpen
+        ? (int)((openDuration > (millis() - doorOpenTime))
+            ? (openDuration - (millis() - doorOpenTime) + 999UL) / 1000UL
+            : 0)
+        : 0;
+    int garaRemaining = garaOpen
+        ? (int)((garaCloseDelay > (millis() - garaOpenTime))
+            ? (garaCloseDelay - (millis() - garaOpenTime) + 999UL) / 1000UL
+            : 0)
+        : 0;
+    if (doorRemaining != lastDoorRemainingSeconds || garaRemaining != lastGaraRemainingSeconds) {
+        lastDoorRemainingSeconds = doorRemaining;
+        lastGaraRemainingSeconds = garaRemaining;
+        statusDirty = true;
+    }
 }
 
 void sendAuthRequest(const char *method, const String &credential, const char *target) {
@@ -609,9 +1013,13 @@ void applyAuthResult(bool allowed, const char *target, const char *source, int s
     authRequestId = "";
     authPendingTarget = "";
     if (allowed) {
-        if (seconds >= 1 && seconds <= 600) openDuration = (unsigned long)seconds * 1000UL;
+        if (sysState == MODE_LOCKOUT) {
+            lcd.setCursor(0, 1);
+            lcd.print("Dang bi khoa   ");
+            statusDirty = true;
+            return;
+        }
         if (strcmp(target, "garageDoor") == 0) {
-            garaManualMode = true;
             openGarage(source);
         } else {
             triggerOpenDoor(source);
@@ -634,12 +1042,20 @@ void applyAuthResult(bool allowed, const char *target, const char *source, int s
 void handleWsCommand(const char* json) {
     if (!networkEnabled()) return;
 
-    StaticJsonDocument<256> doc;
+    DynamicJsonDocument doc(12288);
     if (deserializeJson(doc, json) != DeserializationError::Ok) {
         return;
     }
 
     String msgType = doc["type"]    | "";
+    if (msgType == "config_sync" || msgType == "config_update") {
+        if (applyConfigJson(String(json), true)) {
+            applyFanAutoNow(true);
+            applyLightConfigNow();
+            pushStatus(true);
+        }
+        return;
+    }
     if (msgType == "auth_result") {
         String requestId = doc["requestId"] | "";
         if (!authPending || requestId != authRequestId) return;
@@ -679,7 +1095,7 @@ void handleWsCommand(const char* json) {
         else {
             if (payload.length() > 0) {
                 int sec = payload.toInt();
-                if (sec >= 1 && sec <= 600) openDuration = (unsigned long)sec * 1000UL;
+                setAutoCloseSeconds(sec);
             }
             triggerOpenDoor("App/Web");
             result = "DOOR_OPENED";
@@ -691,7 +1107,7 @@ void handleWsCommand(const char* json) {
         else {
             if (payload.length() > 0) {
                 int sec = payload.toInt();
-                if (sec >= 1 && sec <= 600) openDuration = (unsigned long)sec * 1000UL;
+                setAutoCloseSeconds(sec);
             }
             triggerOpenDoor("App/Web");
             result = "DOOR_OPENED";
@@ -775,8 +1191,9 @@ void handleWsCommand(const char* json) {
         int sec = payload.toInt();
         if (sec < 1 || sec > 600) { result = "INVALID_DURATION"; }
         else {
-            openDuration = (unsigned long)sec * 1000UL;
+            setAutoCloseSeconds(sec);
             if (isDoorOpen) doorOpenTime = millis();
+            if (garaOpen) garaOpenTime = millis();
             result = "DURATION_SET";
         }
     }
@@ -787,12 +1204,16 @@ void handleWsCommand(const char* json) {
     }
     // ─── [V4.0-F1] LỆNH CỔNG GARA ───────────────────────────────────
     else if (cmd == "gara_open") {
-        garaManualMode = true;
-        if (!garaOpen) {
-            openGarage("App/Web");
-            result = "GARA_OPENED";
+        if (sysState == MODE_LOCKOUT) {
+            result = "SYSTEM_LOCKED";
         } else {
-            result = "GARA_ALREADY_OPEN";
+            garaManualMode = true;
+            if (!garaOpen) {
+                openGarage("App/Web");
+                result = "GARA_OPENED";
+            } else {
+                result = "GARA_ALREADY_OPEN";
+            }
         }
     }
     else if (cmd == "gara_close") {
@@ -816,8 +1237,14 @@ void handleWsCommand(const char* json) {
     }
     // ─── [V4.0-F2] LỆNH QUẠT ────────────────────────────────────────
     else if (cmd == "fan_auto") {
+        int pct = payload.length() > 0 ? payload.toInt() : fanAutoSpeedPct;
+        if (pct >= 1 && pct <= 100) {
+            fanAutoSpeedPct = pct;
+            prefs.putInt("fan_auto_pct", fanAutoSpeedPct);
+        }
         if (fanManualMode) statusDirty = true;
         fanManualMode = false;
+        applyFanAutoNow(true);
         result = "FAN_AUTO_ON";
     }
     else if (cmd == "fan_set") {
@@ -827,12 +1254,13 @@ void handleWsCommand(const char* json) {
         else {
             int d   = payload.substring(0, sep).toInt();
             int pct = payload.substring(sep + 1).toInt();
-            if (d < -1 || d > 1)      { result = "INVALID_DIR"; }
+            if (d != -1 && d != 0 && d != 1)      { result = "INVALID_DIR"; }
             else if (pct < 0 || pct > 100) { result = "INVALID_SPEED"; }
             else {
                 if (!fanManualMode) statusDirty = true;
                 fanManualMode = true;
                 if (pct == 0) d = 0;
+                else if (d == 0) d = 1;
                 setFanPercent(d, pct);
                 result = "FAN_SET";
             }
@@ -886,31 +1314,50 @@ void handleWsCommand(const char* json) {
                 pirOffDelay = (unsigned long)holdSec * 1000UL;
                 lightBrightness = brightness;
                 lightEffect = effect;
-                if (pirLightState) applyPirLightOutput(true);
+                applyLightConfigNow();
+                prefs.putULong("light_hold", pirOffDelay);
+                prefs.putInt("light_bri", lightBrightness);
+                prefs.putString("light_fx", lightEffect);
                 statusDirty = true;
                 result = "LIGHT_CONFIG_SET";
             }
         }
     }
     else if (cmd == "fan_config") {
-        // payload: "temp_on:temp_off:hum_on:hum_off"
+        // payload: "temp_on:temp_off:hum_on:hum_off[:auto_speed_pct]"
+        // auto_speed_pct là tốc độ tùy chỉnh khi quạt ở chế độ Tự động.
         float vals[4];
         int start = 0;
         bool ok = true;
+        int autoPct = fanAutoSpeedPct;
         for (int i = 0; i < 4; i++) {
-            int sep = (i == 3) ? -1 : payload.indexOf(':', start);
+            int sep = payload.indexOf(':', start);
             String part = (sep == -1) ? payload.substring(start) : payload.substring(start, sep);
             if (part.length() == 0) { ok = false; break; }
             vals[i] = part.toFloat();
+            if (sep == -1 && i < 3) { ok = false; break; }
             start = sep + 1;
         }
-        if (!ok || vals[1] >= vals[0] || vals[3] >= vals[2]) {
+        if (ok && start > 0 && start < (int)payload.length()) {
+            int parsedPct = payload.substring(start).toInt();
+            if (parsedPct < 1 || parsedPct > 100) ok = false;
+            else autoPct = parsedPct;
+        }
+        if (!ok || vals[1] >= vals[0] || vals[3] <= vals[2]) {
             result = "INVALID_THRESHOLDS";
         } else {
             fanTempOnThresh = vals[0];
             fanTempHyst = vals[0] - vals[1];
             fanHumOnThresh = vals[2];
-            fanHumHyst = vals[2] - vals[3];
+            fanHumHyst = vals[3] - vals[2];
+            fanAutoSpeedPct = autoPct;
+            prefs.putFloat("fan_t_on", fanTempOnThresh);
+            prefs.putFloat("fan_t_hys", fanTempHyst);
+            prefs.putFloat("fan_h_on", fanHumOnThresh);
+            prefs.putFloat("fan_h_hys", fanHumHyst);
+            prefs.putInt("fan_auto_pct", fanAutoSpeedPct);
+            applyFanAutoNow(true);
+            statusDirty = true;
             result = "FAN_CONFIG_SET";
         }
     }
@@ -932,7 +1379,8 @@ void wsEvent(WStype_t type, uint8_t *payload, size_t length) {
         case WStype_CONNECTED:
             wsConnected = true;
             lcd.setCursor(0, 0); lcd.print("WS: Connected!");
-            pushStatus(true);  // Push trạng thái ngay khi kết nối
+            requestConfigSync(true); // bat buoc sync moi khi ket noi lai
+            pushStatus(true);    // Push trạng thái ngay khi kết nối
             break;
 
         case WStype_DISCONNECTED:
@@ -993,20 +1441,23 @@ void handleKeyModeNormal(char key) {
         } else { keypadActive = false; showIdleScreen(); }
     } else if (key == '#') {
         if (currentInput.length() == 0) return;
-        if (networkEnabled() && wsConnected) {
-            sendAuthRequest("password", currentInput, "mainDoor");
-        } else if (currentInput == correctPassword) {
+        LocalAccessItem *pass = findLocalPassword(currentInput);
+        if (pass && localAccessAllowed(*pass)) {
+            triggerOpenDoor(pass->source);
+        } else if (!accessConfigSynced && currentInput == correctPassword) {
             triggerOpenDoor("Mat Khau");
-        } else if (guestPassValid() && currentInput == guestPassword) {
+        } else if (!accessConfigSynced && guestPassValid() && currentInput == guestPassword) {
             triggerOpenDoor("Khach(OTP)");
             clearGuestPass();
         } else {
-            bool expired = (guestPassword.length() >= (size_t)MIN_PASS_LEN
+            bool expiredLocal = pass && !localAccessAllowed(*pass);
+            bool expiredLegacy = (guestPassword.length() >= (size_t)MIN_PASS_LEN
                             && currentInput == guestPassword && !guestPassValid());
-            if (expired) clearGuestPass();
+            if (expiredLegacy) clearGuestPass();
             lcd.setCursor(0, 1);
-            lcd.print(expired ? "OTP het han!    " : "Sai Mat Khau!   ");
+            lcd.print((expiredLocal || expiredLegacy) ? "Het han/ngoai gio" : "Sai Mat Khau!   ");
             failedAuth();
+            scheduleNotify("access_failed", "keypad");
         }
         currentInput = "";
     } else {
@@ -1107,6 +1558,18 @@ void setup() {
     correctPassword   = getOrInitPrefString("password", "123456");
     guestPassword     = prefs.getString("guest_pass", "");
     guestPassExpiryMs = 0;
+    {
+        unsigned long savedAutoClose = prefs.getULong("auto_close_s", openDuration / 1000UL);
+        if (savedAutoClose >= 1 && savedAutoClose <= 600) setAutoCloseSeconds((int)savedAutoClose);
+    }
+    fanTempOnThresh   = prefs.getFloat("fan_t_on", fanTempOnThresh);
+    fanTempHyst       = prefs.getFloat("fan_t_hys", fanTempHyst);
+    fanHumOnThresh    = prefs.getFloat("fan_h_on", fanHumOnThresh);
+    fanHumHyst        = prefs.getFloat("fan_h_hys", fanHumHyst);
+    fanAutoSpeedPct   = prefs.getInt("fan_auto_pct", fanAutoSpeedPct);
+    pirOffDelay       = prefs.getULong("light_hold", pirOffDelay);
+    lightBrightness   = prefs.getInt("light_bri", lightBrightness);
+    lightEffect       = prefs.getString("light_fx", lightEffect);
     String legacyUID  = prefs.getString("card_uid", "");
     legacyUID.trim();
     String mainDefault = legacyUID.length() > 0 ? legacyUID : "23 4E F6 2F";
@@ -1146,6 +1609,7 @@ void setup() {
     ledcAttachChannel(FAN_ENA, FAN_PWM_FREQ, FAN_PWM_BITS, FAN_PWM_CHAN);
     ledcWrite(FAN_ENA, 0);
     setPirLight(false);
+    loadConfigFromPrefs();
 
     Wire.begin(I2C_SDA, I2C_SCL);
     lcd.init(); lcd.backlight();
@@ -1181,8 +1645,12 @@ void loop() {
     if (networkEnabled()) {
         maintainWiFi();
         wsClient.loop();  // [V4.0] xử lý WS events: nhận lệnh, heartbeat, reconnect
+        markCountdownStatusDirtyIfNeeded();
         pushStatusIfDirty();
         pushStatusIfPeriodicDue();
+        if (wsConnected && (lastConfigRequestAt == 0 || millis() - lastConfigRequestAt >= CONFIG_SYNC_INTERVAL)) {
+            requestConfigSync(false);
+        }
     }
 
     // [B] Tự động đóng cửa
@@ -1211,7 +1679,15 @@ void loop() {
         long timeLeft = (long)(currentLockoutDuration -
                         (unsigned long)(millis() - lockoutStartTime)) / 1000;
         if (timeLeft <= 0) {
-            failedAttempts = 0; lockDoor();
+            // Hết thời gian lockout: mở lại quyền xác thực cho cả cửa chính và gara.
+            // Không tự reset lockoutCount ở đây để vẫn có thể tăng thời gian khóa nếu tiếp tục sai;
+            // lockoutCount chỉ reset khi có một lần mở hợp lệ thành công.
+            failedAttempts = 0;
+            sysState = MODE_NORMAL;
+            currentInput = "";
+            keypadActive = false;
+            showIdleScreen();
+            statusDirty = true;
         } else {
             lcd.setCursor(0, 1);
             lcd.print("Thu lai sau:");
@@ -1290,38 +1766,8 @@ void loop() {
         if (!isnan(t)) temperature = t;
         if (!isnan(h)) humidity    = h;
 
-        // [V4.0-F2] Chỉ chạy logic auto khi không ở manual mode
-        if (!fanManualMode) {
-            int shouldDir  = fanDir;
-            int shouldDuty = fanSpeed;
-
-            if (fanDir != 1 && temperature > fanTempOnThresh) {
-                shouldDir  = 1;
-                shouldDuty = calcFanDuty(temperature - fanTempOnThresh, FAN_TEMP_SCALE);
-            } else if (fanDir == 1 && temperature < fanTempOnThresh - fanTempHyst) {
-                shouldDir  = 0; shouldDuty = 0;
-            } else if (fanDir == 1) {
-                shouldDuty = calcFanDuty(temperature - fanTempOnThresh, FAN_TEMP_SCALE);
-            } else if (fanDir != -1 && humidity > 0.0f && humidity < fanHumOnThresh) {
-                shouldDir  = -1;
-                shouldDuty = calcFanDuty(fanHumOnThresh - humidity, FAN_HUM_SCALE);
-            } else if (fanDir == -1 && humidity > fanHumOnThresh + fanHumHyst) {
-                shouldDir  = 0; shouldDuty = 0;
-            } else if (fanDir == -1 && humidity > 0.0f) {
-                shouldDuty = calcFanDuty(fanHumOnThresh - humidity, FAN_HUM_SCALE);
-            }
-
-            bool dirChanged  = (shouldDir  != fanDir);
-            bool dutyChanged = (shouldDuty != fanSpeed) && (fanDir != 0);
-            if (dirChanged || dutyChanged) {
-                setFan(shouldDir, shouldDuty);
-                if (dirChanged) {
-                    if (shouldDir == 1)       scheduleNotify("fan", "heat_fwd");
-                    else if (shouldDir == -1)  scheduleNotify("fan", "hum_rev");
-                    else                       scheduleNotify("fan", "off");
-                }
-            }
-        }
+        // [V4.1] Auto fan được tách thành hàm để apply ngay khi server đổi ngưỡng/tốc độ.
+        applyFanAutoNow();
 
         markSensorStatusDirtyIfNeeded();
         pushStatusIfDirty();
@@ -1357,18 +1803,23 @@ void loop() {
         }
         lastDistanceCm = dist;
 
-        // Mở gara từ siêu âm (phát hiện xe áp sát)
-        if (!garaManualMode && !isDoorOpen && dist > 0 && dist <= GARA_DIST_THRESH) {
+        // [V4.2] Gara độc lập với cửa chính.
+        // Manual gara chỉ tắt cơ chế mở/gia hạn bằng siêu âm.
+        // Gara luôn tự đóng theo timer dù được mở bằng web, thẻ hay siêu âm.
+        // Không kiểm tra isDoorOpen ở đây: cửa chính đang mở vẫn được phép mở/gia hạn gara.
+        if (!garaManualMode && dist > 0 && dist <= GARA_DIST_THRESH) {
             if (!garaOpen) {
                 openGarage("ultrasonic");
             } else {
                 garaOpenTime = millis();
             }
-        } else if (!garaManualMode && garaOpen && (millis() - garaOpenTime > GARA_CLOSE_DELAY)) {
-            closeGarage("auto");
+        }
+        if (garaOpen && (millis() - garaOpenTime > garaCloseDelay)) {
+            closeGarage("timer");
         }
 
-        // Fast-close
+        // Fast-close chỉ áp dụng cho cửa chính.
+        // Logic này không được dùng để khóa hay chặn gara.
         if (isDoorOpen && doorByAuth) {
             static const int SONAR_CONFIRM_NEEDED = 3;
             if (!doorPassDetected && dist > 0 && dist <= GARA_DIST_THRESH) {
@@ -1380,10 +1831,8 @@ void loop() {
             } else if (dist > GARA_DIST_THRESH || dist < 0) {
                 sonarConfirmCount = 0;
                 if (doorPassDetected) {
-                    openDuration     = DOOR_FAST_CLOSE;
-                    doorOpenTime     = millis();
                     doorPassDetected = false;
-                    scheduleNotify("door_fastclose", "sonar");
+                    statusDirty      = true;
                 }
             }
         }
@@ -1391,7 +1840,9 @@ void loop() {
     }
 
     // ── [J] RFID ─────────────────────────────────────────────────────
-    if (!isDoorOpen && sysState != MODE_LOCKOUT
+    // RFID độc lập với trạng thái cửa chính: cửa chính đang mở vẫn đọc thẻ để mở gara.
+    // Lockout vẫn chặn xác thực theo chính sách bảo mật chung.
+    if (sysState != MODE_LOCKOUT
         && rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
         char cardUID[16] = "";
         for (byte i = 0; i < rfid.uid.size; i++) {
@@ -1400,16 +1851,34 @@ void loop() {
             strncat(cardUID, buf, sizeof(cardUID) - strlen(cardUID) - 1);
         }
         String uidString = String(cardUID);
-        if (networkEnabled() && wsConnected) {
+        normalizeUidString(uidString);
+        LocalAccessItem *card = findLocalCard(uidString);
+        if (card && localAccessAllowed(*card)) {
+            if (strcmp(card->target, "garageDoor") == 0) {
+                openGarage(card->source); // RFID gara không chuyển manual
+            } else if (isDoorOpen) {
+                resetAuthFailureCounter();
+                lcd.setCursor(0, 1); lcd.print("Cua dang mo     ");
+            } else {
+                triggerOpenDoor(card->source);
+            }
+        } else if (!accessConfigSynced && strcmp(cardUID, mainDoorCardUID) == 0) {
+            if (isDoorOpen) {
+                resetAuthFailureCounter();
+                lcd.setCursor(0, 1); lcd.print("Cua dang mo     ");
+            } else {
+                triggerOpenDoor("The Tu");
+            }
+        } else if (!accessConfigSynced && strcmp(cardUID, garageCardUID) == 0) {
+            openGarage("The Gara"); // không chuyển manual
+        } else if (networkEnabled() && wsConnected) {
+            // Chỉ hỏi server khi cache local chưa có thẻ: phục vụ enroll/fallback.
+            // target=any để server tự trả về mainDoor hoặc garageDoor đúng theo thẻ đã lưu.
             sendAuthRequest("rfid", uidString, "any");
-        } else if (strcmp(cardUID, mainDoorCardUID) == 0) {
-            triggerOpenDoor("The Tu");
-        } else if (strcmp(cardUID, garageCardUID) == 0) {
-            garaManualMode = true;
-            openGarage("The Gara");
         } else {
             lcd.setCursor(0, 1); lcd.print("The khong hop le");
             failedAuth();
+            scheduleNotify("access_failed", "rfid");
         }
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
@@ -1419,6 +1888,8 @@ void loop() {
     }
 
     // ── [K] Keypad ────────────────────────────────────────────────────
+    // Keypad chỉ điều khiển cửa chính. Nếu cửa chính đang mở thì bỏ qua keypad,
+    // nhưng RFID/siêu âm gara ở trên vẫn hoạt động độc lập.
     char key = keypad.getKey();
     if (!key || isDoorOpen) { flushNotify(); pushStatusIfDirty(); return; }
 

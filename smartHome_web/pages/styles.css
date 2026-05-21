@@ -486,6 +486,22 @@ input:focus, select:focus { border-color:var(--emerald); box-shadow:0 0 0 4px rg
   font-weight:800;
 }
 .segmented button.is-active { color:var(--emerald-2); background:#fff; box-shadow:0 1px 8px rgba(26,46,37,.08); }
+.analytics-filter {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.date-picker-label {
+  min-width:178px;
+  grid-template-columns:auto minmax(138px, 1fr);
+  align-items:center;
+  gap:9px;
+  color:var(--muted);
+}
+.date-picker-label input { min-height:42px; border-radius:14px; }
+.date-picker-label.is-muted { opacity:.72; }
 .mode-switch {
   position:relative;
   display:grid;
@@ -529,6 +545,7 @@ input:focus, select:focus { border-color:var(--emerald); box-shadow:0 0 0 4px rg
 .mode-switch button:not(:disabled):active { transform:scale(.98); }
 .form-grid, .threshold-grid, .settings-grid { display:grid; gap:14px; }
 .form-grid.two { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+.form-grid.three { grid-template-columns:repeat(3, minmax(0, 1fr)); }
 .threshold-grid { grid-template-columns:repeat(4, minmax(0, 1fr)); }
 .input-suffix { position:relative; }
 .input-suffix span {
@@ -642,10 +659,32 @@ tr:last-child td { border-bottom:0; }
   text-align:center;
 }
 
-.chart-card { min-height:300px; }
+.chart-card { min-height:300px; cursor:zoom-in; }
+.chart-card:hover { border-color:var(--line-strong); box-shadow:var(--shadow); }
 .chart-frame {
   position:relative;
   min-height:250px;
+  padding-left:46px;
+}
+.chart-plot {
+  position:relative;
+  min-height:210px;
+}
+.chart-y-axis {
+  position:absolute;
+  left:0;
+  top:0;
+  bottom:38px;
+  width:38px;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  align-items:flex-end;
+  color:var(--muted);
+  font-family:var(--font-mono);
+  font-size:11px;
+  font-weight:800;
+  pointer-events:none;
 }
 .line-chart {
   width:100%;
@@ -681,6 +720,18 @@ tr:last-child td { border-bottom:0; }
   box-shadow:0 0 0 4px rgba(19,149,111,.12);
   pointer-events:auto;
 }
+.chart-points span.period-morning, .bar-chart span.period-morning { background:var(--blue); }
+.chart-points span.period-afternoon, .bar-chart span.period-afternoon { background:var(--emerald); }
+.chart-points span.period-night, .bar-chart span.period-night { background:var(--violet); }
+.chart-points span.is-anomaly, .bar-chart span.is-anomaly {
+  background:var(--red);
+  box-shadow:0 0 0 5px rgba(217,75,75,.16);
+}
+.chart-points span.is-no-data, .bar-chart span.is-no-data {
+  background:#cbd5d1;
+  box-shadow:0 0 0 4px rgba(141,160,153,.12);
+  opacity:.72;
+}
 .bar-chart {
   height:210px;
   display:flex;
@@ -698,6 +749,11 @@ tr:last-child td { border-bottom:0; }
   border-radius:10px 10px 5px 5px;
   background:linear-gradient(180deg, var(--teal), var(--emerald));
 }
+.bar-chart span.period-morning { background:linear-gradient(180deg, #6aa8f6, var(--blue)); }
+.bar-chart span.period-afternoon { background:linear-gradient(180deg, var(--teal), var(--emerald)); }
+.bar-chart span.period-night { background:linear-gradient(180deg, #9b8cff, var(--violet)); }
+.bar-chart span.is-anomaly { background:linear-gradient(180deg, #ff9d91, var(--red)); }
+.bar-chart span.is-no-data { background:linear-gradient(180deg, #d8e0dd, #b9c7c2); }
 .chart-axis {
   display:grid;
   grid-template-columns:repeat(3, minmax(0, 1fr));
@@ -718,6 +774,31 @@ tr:last-child td { border-bottom:0; }
   font-family:var(--font-mono);
   font-size:12px;
 }
+.chart-dialog .chart-frame { min-height:430px; }
+.chart-dialog .chart-plot { min-height:390px; }
+.chart-dialog .line-chart, .chart-dialog .bar-chart, .chart-dialog .chart-points { height:390px; }
+.chart-legend {
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  margin-top:14px;
+  color:var(--muted);
+  font-size:12px;
+  font-weight:800;
+}
+.chart-legend span { display:inline-flex; align-items:center; gap:7px; }
+.legend-dot {
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  display:inline-block;
+  background:var(--emerald);
+}
+.legend-dot.morning { background:var(--blue); }
+.legend-dot.afternoon { background:var(--emerald); }
+.legend-dot.night { background:var(--violet); }
+.legend-dot.anomaly { background:var(--red); }
+.legend-dot.no-data { background:#cbd5d1; }
 
 .settings-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
 .settings-list { display:grid; gap:10px; }
@@ -754,7 +835,12 @@ tr:last-child td { border-bottom:0; }
 .confirm-dialog {
   text-align:center;
 }
-.form-dialog { width:min(520px, 100%); }
+.form-dialog {
+  width:min(520px, 100%);
+  max-height:min(88vh, 820px);
+  overflow:auto;
+}
+.form-dialog.chart-dialog { width:min(980px, 100%); }
 .modal-head {
   display:flex;
   align-items:center;
@@ -764,6 +850,19 @@ tr:last-child td { border-bottom:0; }
 .confirm-dialog .modal-icon { margin:0 auto 14px; color:#9c2525; background:#fff0ef; }
 .confirm-dialog p { margin-top:10px; color:var(--muted); line-height:1.55; }
 .modal-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+.policy-panel {
+  display:grid;
+  gap:14px;
+  padding:14px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:var(--surface-2);
+}
+.policy-time-window, .policy-date-range, .policy-custom { display:none; }
+.policy-panel.policy-time_window .policy-time-window { display:grid; }
+.policy-panel.policy-date_range .policy-date-range { display:grid; }
+.policy-panel.policy-custom .policy-custom { display:grid; }
+.compact-form { margin-top:16px; }
 
 .toast-root {
   position:fixed;
@@ -872,7 +971,7 @@ tr:last-child td { border-bottom:0; }
 }
 
 @media (max-width:620px) {
-  .overview-cards, .metric-grid, .stat-grid, .quick-actions, .form-grid.two, .threshold-grid, .settings-list.two-col { grid-template-columns:1fr; }
+  .overview-cards, .metric-grid, .stat-grid, .quick-actions, .form-grid.two, .form-grid.three, .threshold-grid, .settings-list.two-col { grid-template-columns:1fr; }
   .card { padding:16px; border-radius:18px; }
   .section-head, .state-line, .timeline-top { align-items:flex-start; flex-direction:column; }
   .state-line span, .settings-list strong { text-align:left; }
@@ -880,4 +979,214 @@ tr:last-child td { border-bottom:0; }
   .filter-row select, .filter-row input { width:100%; }
   .modal-actions { flex-direction:column-reverse; }
   .modal-actions .btn { width:100%; }
+}
+
+/* Fix biểu đồ 30 ngày: tránh thanh bị tràn khỏi khung */
+.chart-frame,
+.chart-plot {
+  min-width: 0;
+  overflow: hidden;
+}
+.bar-chart {
+  gap: clamp(2px, .45vw, 8px);
+  overflow: hidden;
+}
+.bar-chart span {
+  min-width: 0;
+}
+.chart-points {
+  left: 4px;
+  right: 4px;
+}
+.chart-axis {
+  overflow: hidden;
+}
+.chart-axis span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 620px) {
+  .chart-frame { padding-left: 34px; }
+  .chart-y-axis { width: 30px; font-size: 10px; }
+  .bar-chart { gap: 2px; padding: 12px; }
+}
+
+/* ------------------------------------------------------------------
+   FIX CHART LEFT AXIS LABELS
+   - Chừa đủ chỗ cho nhãn 3+ chữ số như 183phút, 120lần, 100%.
+   - Không clip trục Y trong card/modal.
+   - Vẫn giữ biểu đồ 30 ngày không tràn khỏi khung vẽ.
+------------------------------------------------------------------- */
+.chart-frame {
+  position: relative;
+  min-width: 0;
+  overflow: visible;
+  padding-left: 84px;
+}
+
+.chart-plot {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart-y-axis {
+  left: 0;
+  width: 74px;
+  padding-right: 10px;
+  white-space: nowrap;
+  overflow: visible;
+  text-align: right;
+  z-index: 2;
+}
+
+.chart-y-axis span {
+  display: block;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.chart-dialog .chart-frame {
+  padding-left: 94px;
+}
+
+.chart-dialog .chart-y-axis {
+  width: 84px;
+  padding-right: 12px;
+}
+
+.bar-chart {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.bar-chart span {
+  min-width: 0;
+}
+
+.line-chart {
+  overflow: hidden;
+}
+
+@media (max-width: 620px) {
+  .chart-frame {
+    padding-left: 62px;
+  }
+
+  .chart-y-axis {
+    width: 54px;
+    padding-right: 8px;
+    font-size: 10px;
+  }
+
+  .chart-dialog .chart-frame {
+    padding-left: 68px;
+  }
+
+  .chart-dialog .chart-y-axis {
+    width: 60px;
+  }
+}
+
+/* ------------------------------------------------------------------
+   V5: Chart readability
+   - Trục ngang chỉ hiển thị mốc thời gian/ngày.
+   - Giá trị cụ thể hiển thị nhỏ phía trên từng cột bar.
+   - Không sai range, không cắt nhãn trục trái.
+------------------------------------------------------------------- */
+.chart-axis.time-only span {
+  display: block;
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-axis.time-only strong {
+  display: none;
+}
+
+.bar-chart.bar-chart-values {
+  position: relative;
+  align-items: stretch;
+  padding-top: 34px;
+  padding-bottom: 16px;
+}
+
+.bar-chart.bar-chart-values .bar-item {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: block;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.bar-chart.bar-chart-values .bar-fill {
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  bottom: 0;
+  min-height: 0;
+  border-radius: 10px 10px 5px 5px;
+  background: linear-gradient(180deg, var(--teal), var(--emerald));
+  box-shadow: none;
+}
+
+.bar-chart.bar-chart-values .bar-value {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 64px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, .82);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.bar-chart.bar-chart-values .bar-fill.period-morning { background: linear-gradient(180deg, #6aa8f6, var(--blue)); }
+.bar-chart.bar-chart-values .bar-fill.period-afternoon { background: linear-gradient(180deg, var(--teal), var(--emerald)); }
+.bar-chart.bar-chart-values .bar-fill.period-night { background: linear-gradient(180deg, #9b8cff, var(--violet)); }
+.bar-chart.bar-chart-values .bar-fill.is-anomaly {
+  background: linear-gradient(180deg, #ff9d91, var(--red));
+  box-shadow: 0 0 0 5px rgba(217, 75, 75, .16);
+}
+.bar-chart.bar-chart-values .bar-fill.is-no-data {
+  background: linear-gradient(180deg, #d8e0dd, #b9c7c2);
+  opacity: .72;
+}
+
+.chart-dialog .bar-chart.bar-chart-values {
+  padding-top: 42px;
+}
+
+@media (max-width: 620px) {
+  .bar-chart.bar-chart-values {
+    padding-top: 28px;
+  }
+
+  .bar-chart.bar-chart-values .bar-value {
+    max-width: 46px;
+    font-size: 9px;
+  }
+
+  .bar-chart.bar-chart-values .bar-fill {
+    left: 8%;
+    right: 8%;
+  }
 }

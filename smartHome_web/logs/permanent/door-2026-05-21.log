@@ -29,3 +29,240 @@
 [00:30:48] [INFO] Cong gara mo - phat hien boi: The Gara
 [00:31:23] [INFO] Cong gara mo - phat hien boi: The Gara
 [00:31:31] [INFO] Web lenh DONG cong gara
+[07:32:39] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[07:32:39] [INFO] Cua da dong
+[07:32:39] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[07:33:22] [INFO] Web lenh MO cong gara
+[07:33:22] [INFO] Cong gara mo - phat hien boi: Ung dung / Web
+[07:33:32] [INFO] Mo cua boi: Ung dung / Web
+[07:33:32] [INFO] Cua da mo boi: Ung dung / Web
+[07:33:37] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[07:33:38] [INFO] Cua da dong
+[07:47:50] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[07:47:50] [INFO] Cua da dong
+[07:48:13] [INFO] Mo cua boi: Keypad (Mat khau)
+[07:48:14] [INFO] Cua da mo boi: Keypad (Mat khau)
+[07:48:43] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[07:48:43] [INFO] Mo cua boi: The tu (RFID)
+[07:49:13] [INFO] Dong cua (da mo boi: The tu (RFID))
+[07:49:14] [INFO] Cua da dong
+[07:49:18] [INFO] Cong gara mo - phat hien boi: The Gara
+[07:49:58] [INFO] Cua da mo (nguon khong xac dinh)
+[07:49:58] [INFO] Mo cua boi: Ung dung / Web
+[07:50:08] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[07:50:08] [INFO] Cua da dong
+[07:54:37] [INFO] Mo cua boi: Ung dung / Web
+[07:54:37] [INFO] Cua da mo boi: Ung dung / Web
+[07:54:46] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[07:54:48] [INFO] Cua da dong
+[07:54:56] [INFO] Web lenh MO cong gara
+[07:54:56] [INFO] Cong gara mo - phat hien boi: Ung dung / Web
+[07:57:54] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[07:58:08] [INFO] Cong gara mo - phat hien boi: The Gara
+[07:58:26] [INFO] Cua da mo (nguon khong xac dinh)
+[07:58:26] [INFO] Mo cua boi: Ung dung / Web
+[07:58:36] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[07:58:37] [INFO] Cua da dong
+[07:59:25] [INFO] Mo cua boi: The tu (RFID)
+[07:59:27] [INFO] Cua da mo boi: The tu (RFID)
+[07:59:35] [INFO] Dong cua (da mo boi: The tu (RFID))
+[07:59:36] [INFO] Cua da dong
+[08:01:15] [INFO] Cua da mo (nguon khong xac dinh)
+[08:01:15] [INFO] Mo cua boi: Ung dung / Web
+[08:01:36] [INFO] Web lenh MO cong gara
+[08:01:36] [INFO] Cong gara mo - phat hien boi: Ung dung / Web
+[08:01:45] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[08:01:45] [INFO] Cua da dong
+[08:20:50] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[08:20:50] [INFO] Cua da dong
+[08:20:59] [INFO] Cua da mo (nguon khong xac dinh)
+[08:20:59] [INFO] Mo cua boi: Ung dung / Web
+[08:21:00] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[08:21:01] [INFO] Cua da dong
+[08:21:40] [INFO] Cua da mo (nguon khong xac dinh)
+[08:21:40] [INFO] Mo cua boi: Ung dung / Web
+[08:21:41] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[08:21:42] [INFO] Cua da dong
+[08:22:01] [INFO] Cua da mo (nguon khong xac dinh)
+[08:22:01] [INFO] Mo cua boi: Ung dung / Web
+[08:22:31] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[08:22:31] [INFO] Cua da dong
+[08:23:16] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[08:23:17] [WARN] ESP32 ngat ket noi WebSocket
+[08:28:43] [INFO] Cua da mo (nguon khong xac dinh)
+[08:28:43] [INFO] Mo cua boi: The tu (RFID)
+[08:29:13] [INFO] Dong cua (da mo boi: The tu (RFID))
+[08:29:13] [INFO] Cua da dong
+[08:29:22] [INFO] Cong gara mo - phat hien boi: The Gara
+[08:30:02] [INFO] Mo cua boi: Keypad (Mat khau)
+[08:30:02] [INFO] Cua da mo boi: Keypad (Mat khau)
+[08:30:32] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[08:30:33] [INFO] Cua da dong
+[08:30:37] [INFO] Mo cua boi: Ma khach (OTP)
+[08:30:39] [INFO] Cua da mo boi: Ma khach (OTP)
+[08:31:07] [INFO] Dong cua (da mo boi: Ma khach (OTP))
+[08:31:07] [INFO] Cua da dong
+[08:32:00] [INFO] Mo cua boi: Ma khach (OTP)
+[08:32:01] [INFO] Cua da mo boi: Ma khach (OTP)
+[08:32:30] [INFO] Dong cua (da mo boi: Ma khach (OTP))
+[08:32:30] [INFO] Cua da dong
+[09:01:43] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:01:43] [INFO] Cua da dong
+[09:02:42] [INFO] Mo cua boi: Ung dung / Web
+[09:02:43] [INFO] Cua da mo boi: Ung dung / Web
+[09:03:12] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:03:13] [INFO] Cua da dong
+[09:03:41] [INFO] Mo cua boi: Ung dung / Web
+[09:03:41] [INFO] Cua da mo boi: Ung dung / Web
+[09:04:11] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:04:11] [INFO] Cua da dong
+[09:05:09] [INFO] Mo cua boi: Ung dung / Web
+[09:05:10] [INFO] Cua da mo boi: Ung dung / Web
+[09:05:19] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:05:21] [INFO] Cua da dong
+[09:17:26] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:17:26] [INFO] Cua da dong
+[09:17:26] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[09:17:26] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[09:19:38] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:19:38] [INFO] Cua da dong
+[09:20:30] [INFO] Cong gara mo - phat hien boi: The Gara
+[09:22:15] [INFO] Web lenh MO cong gara
+[09:22:15] [INFO] Cong gara mo - phat hien boi: Ung dung / Web
+[09:22:25] [INFO] Web lenh DONG cong gara
+[09:22:30] [INFO] Mo cua boi: Ung dung / Web
+[09:22:31] [INFO] Cua da mo boi: Ung dung / Web
+[09:22:36] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:22:37] [INFO] Cua da dong
+[09:23:08] [WARN] Truy cap bi tu choi: keypad
+[09:23:28] [INFO] Mo cua boi: Keypad (Mat khau)
+[09:23:28] [INFO] Cua da mo boi: Keypad (Mat khau)
+[09:23:38] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[09:23:39] [INFO] Cua da dong
+[09:24:08] [INFO] Mo cua boi: Ma khach (OTP)
+[09:24:08] [INFO] Cua da mo boi: Ma khach (OTP)
+[09:24:18] [INFO] Dong cua (da mo boi: Ma khach (OTP))
+[09:24:18] [INFO] Cua da dong
+[09:24:44] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:24:44] [WARN] ESP32 ngat ket noi WebSocket
+[09:24:58] [INFO] Mo cua boi: Ma khach (OTP)
+[09:24:59] [INFO] Cua da mo boi: Ma khach (OTP)
+[09:25:09] [INFO] Dong cua (da mo boi: Ma khach (OTP))
+[09:25:09] [INFO] Cua da dong
+[09:25:16] [WARN] Truy cap bi tu choi: keypad
+[09:25:59] [WARN] ESP32 ngat ket noi WebSocket
+[09:26:04] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:26:36] [INFO] Cong gara mo - phat hien boi: The Gara
+[09:27:53] [WARN] He thong bi khoa 30s
+[09:27:53] [WARN] He thong bi khoa 30s (qua so lan nhap sai)
+[09:27:59] [INFO] Cua da mo (nguon khong xac dinh)
+[09:27:59] [INFO] Mo cua boi: Ung dung / Web
+[09:28:09] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:28:09] [INFO] Cua da dong
+[09:37:34] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:37:34] [INFO] Cua da dong
+[09:37:39] [INFO] Mo cua boi: Ung dung / Web
+[09:37:40] [INFO] Cua da mo boi: Ung dung / Web
+[09:37:49] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:37:50] [INFO] Cua da dong
+[09:38:00] [INFO] Mo cua boi: Ung dung / Web
+[09:38:01] [INFO] Cua da mo boi: Ung dung / Web
+[09:38:10] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:38:11] [INFO] Cua da dong
+[09:43:59] [INFO] Mo cua boi: Keypad (Mat khau)
+[09:43:59] [INFO] Cua da mo boi: Keypad (Mat khau)
+[09:44:09] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[09:44:09] [INFO] Cua da dong
+[09:44:10] [INFO] Cong gara mo - phat hien boi: The Gara
+[09:44:19] [INFO] Mo cua boi: Keypad (Mat khau)
+[09:44:20] [INFO] Cua da mo boi: Keypad (Mat khau)
+[09:44:29] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[09:44:29] [INFO] Cong gara mo - phat hien boi: The Gara
+[09:44:29] [INFO] Cua da dong
+[09:45:18] [WARN] He thong bi khoa 30s
+[09:45:18] [WARN] He thong bi khoa 30s (qua so lan nhap sai)
+[09:45:26] [INFO] Cua da mo (nguon khong xac dinh)
+[09:45:26] [INFO] Mo cua boi: Ung dung / Web
+[09:45:36] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:45:36] [INFO] Cua da dong
+[09:45:39] [INFO] Cong gara mo - phat hien boi: The Gara
+[09:46:08] [INFO] Mo cua boi: Keypad (Mat khau)
+[09:46:09] [INFO] Cua da mo boi: Keypad (Mat khau)
+[09:46:18] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[09:46:18] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[09:46:19] [INFO] Cua da dong
+[09:51:56] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:51:56] [INFO] Cua da dong
+[09:51:56] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[09:51:56] [WARN] Truy cap bi tu choi: keypad
+[09:51:56] [WARN] Truy cap bi tu choi: keypad
+[09:51:56] [INFO] Mo cua boi: Keypad (Mat khau)
+[09:51:56] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[09:53:58] [WARN] Truy cap bi tu choi: keypad
+[09:54:00] [WARN] Truy cap bi tu choi: keypad
+[09:54:02] [WARN] He thong bi khoa 30s (qua so lan nhap sai)
+[09:54:02] [WARN] Truy cap bi tu choi: keypad
+[09:54:03] [WARN] He thong bi khoa 30s
+[09:54:33] [INFO] Cua da dong
+[09:55:40] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:55:40] [WARN] ESP32 ngat ket noi WebSocket
+[09:56:20] [WARN] He thong bi khoa 30s
+[09:56:20] [WARN] He thong bi khoa 30s (qua so lan nhap sai)
+[09:56:32] [INFO] Cua da mo (nguon khong xac dinh)
+[09:56:33] [INFO] Mo cua boi: Ung dung / Web
+[09:56:43] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:56:43] [INFO] Cua da dong
+[09:56:52] [INFO] Mo cua boi: The tu (RFID)
+[09:56:52] [INFO] Cua da mo boi: The tu (RFID)
+[09:56:54] [INFO] Cong gara mo - phat hien boi: The Gara
+[09:57:02] [INFO] Dong cua (da mo boi: The tu (RFID))
+[09:57:03] [INFO] Cua da dong
+[09:58:14] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[09:58:14] [INFO] Cua da dong
+[09:58:16] [INFO] Mo cua boi: Ung dung / Web
+[09:58:17] [INFO] Cua da mo boi: Ung dung / Web
+[09:58:18] [INFO] Web lenh MO cong gara
+[09:58:18] [INFO] Cong gara mo - phat hien boi: Ung dung / Web
+[09:58:26] [INFO] Dong cua (da mo boi: Ung dung / Web)
+[09:58:26] [INFO] Cua da dong
+[10:03:02] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[10:03:09] [INFO] Mo cua boi: Keypad (Mat khau)
+[10:03:09] [INFO] Cua da mo boi: Keypad (Mat khau)
+[10:03:17] [INFO] Dong cua (da mo boi: Keypad (Mat khau))
+[10:03:17] [INFO] Cua da dong
+[10:04:56] [INFO] Cong gara mo - phat hien boi: ultrasonic
+[10:09:26] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[10:09:26] [INFO] Cua da dong
+[10:09:36] [WARN] Truy cap bi tu choi: keypad
+[10:09:38] [WARN] Truy cap bi tu choi: keypad
+[10:09:39] [WARN] He thong bi khoa 30s (qua so lan nhap sai)
+[10:09:39] [WARN] Truy cap bi tu choi: keypad
+[10:09:40] [WARN] He thong bi khoa 30s
+[10:09:44] [INFO] Web lenh MO cong gara
+[10:10:09] [INFO] Cua da dong
+[10:10:28] [WARN] Truy cap bi tu choi: keypad
+[10:10:29] [WARN] Truy cap bi tu choi: keypad
+[10:10:31] [WARN] He thong bi khoa 60s (qua so lan nhap sai)
+[10:10:31] [WARN] Truy cap bi tu choi: keypad
+[10:10:32] [WARN] He thong bi khoa 60s
+[10:11:30] [INFO] Cua da dong
+[10:17:45] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[10:17:45] [INFO] Cua da dong
+[10:17:52] [WARN] Truy cap bi tu choi: keypad
+[10:17:58] [INFO] Mo cua boi: The tu (RFID)
+[10:17:58] [INFO] Cua da mo boi: The tu (RFID)
+[10:18:08] [INFO] Dong cua (da mo boi: The tu (RFID))
+[10:18:08] [INFO] Cua da dong
+[10:18:23] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[10:18:23] [INFO] Cua da dong
+[10:23:54] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[10:23:55] [INFO] Cua da dong
+[10:25:35] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[10:25:35] [INFO] Cua da dong
+[10:28:53] [INFO] Cong gara mo - phat hien boi: The Gara
+[10:28:57] [INFO] Mo cua boi: The tu (RFID)
+[10:29:02] [INFO] Cua da mo boi: The tu (RFID)
+[10:29:07] [INFO] Dong cua (da mo boi: The tu (RFID))
+[10:29:09] [INFO] Cua da dong
+[10:30:08] [INFO] ESP32 ket noi WebSocket [::ffff:10.218.174.5]
+[10:30:08] [INFO] Cua da dong

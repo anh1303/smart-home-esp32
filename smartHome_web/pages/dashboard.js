@@ -1,3 +1,5 @@
+//dashboard.js
+
 const API = location.origin;
 const root = document.getElementById('app-root');
 const toastRoot = document.getElementById('toast-root');
@@ -9,6 +11,17 @@ const storage = {
 
 const COMMAND_INTERVAL_MS = 1200;
 const GARAGE_OPEN_WARN_MS = 120000;
+const DEFAULT_CHART_VALUES = {
+  avgTemperature: 27,
+  avgHumidity: 55,
+  fanOnMinutes: 0,
+  lightOnMinutes: 0,
+  failedAccess: 0,
+  lockouts: 0,
+  unlocks: 0,
+  garageEvents: 0,
+  anomalies: 0,
+};
 
 const iconPaths = {
   home: '<path d="m3 10.5 9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/>',
@@ -59,30 +72,35 @@ let state = {
   pendingCommand: null,
   commandLockedUntil: 0,
   commandUnlockRenderAt: 0,
+  securityLockoutUntil: 0,
   lastFormEditAt: 0,
   desiredFan: null,
   desiredLight: null,
   dialog: null,
   login: { loading: false, error: '' },
   forms: {
-    doorAutoClose: 30,
+    autoCloseSeconds: 30,
     lightBrightness: 70,
     lightEffect: 'Static',
     lightHold: 15,
-    fanMode: 'manual',
+    fanMode: 'on',
     fanDir: 1,
     fanSpeed: 60,
     temperatureOnThreshold: 32,
     temperatureOffThreshold: 29,
-    humidityOnThreshold: 78,
-    humidityOffThreshold: 70,
-    timeFilter: 'today',
+    humidityOnThreshold: 40,
+    humidityOffThreshold: 45,
+    timeFilter: '1d',
+    selectedAnalyticsDate: todayDateId(),
+    logsDate: '',
   },
   accessCards: mockAccessCards(),
   passwords: mockPasswords(),
   eventSource: null,
 };
 state.sensor = mockSensor();
+const chartRegistry = new Map();
+let realtimeStatsRefreshTimer = null;
 
 document.addEventListener('DOMContentLoaded', boot);
 
@@ -136,6 +154,17 @@ async function request(path, options = {}) {
 function setState(patch, shouldRender = true) {
   state = { ...state, ...patch };
   if (shouldRender) render();
+}
+
+function isUserEditing() {
+  const active = document.activeElement;
+  if (state.dialog) return true;
+  if (!active) return false;
+  return ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName) || !!active.dataset?.form;
+}
+
+function safeRender() {
+  if (!isUserEditing()) render();
 }
 
 function render() {
@@ -308,6 +337,7 @@ function OverviewPage() {
         <div class="section-head">
           <div><p class="eyebrow">Quick actions</p><h3>Thao tác nhanh</h3></div>
         </div>
+        ${isSystemLockout() ? '<div class="alert danger">Hệ thống đang lockout. Quick action đã bị khóa, chỉ dùng nút Giải khóa truy cập ở trang điều khiển.</div>' : ''}
         <div class="quick-actions">
           ${ActionButton('Mở cửa chính', 'door-open', 'unlock', true)}
           ${ActionButton('Đóng cửa chính', 'door-close', 'lock', false)}
@@ -371,22 +401,20 @@ function SmartHomeIllustration(variant = 'hero') {
 }
 
 function ControlsPage() {
+  const anyDoorOpen = state.sensor.door === 'OPEN' || state.sensor.gara === 'OPEN';
   return h`
     <div class="control-layout">
       ${ControlPanelCard('Cửa chính', 'door', h`
-        <div class="state-line"><strong>${displayState('door', state.sensor.door)}</strong><span>${doorDescription()}</span></div>
-        ${state.sensor.door === 'LOCKED_OUT' ? '<div class="alert danger">Hệ thống đang lockout do nhập sai quá nhiều lần.</div>' : ''}
+        <div class="state-line"><strong>${displayState('door', state.sensor.door)}</strong><span>${doorCountdownText() || doorDescription()}</span></div>
+        ${isSystemLockout() ? '<div class="alert danger">Hệ thống đang lockout do nhập sai quá nhiều lần. Các nút đóng/mở cửa và gara đã bị khóa.</div>' : ''}
         <div class="control-row">
           ${ActionButton('Mở cửa chính', 'door-open', 'unlock', true)}
           ${ActionButton('Đóng cửa chính', 'door-close', 'lock', false)}
         </div>
-        <label>Thời gian tự đóng (giây)
-          <input data-form="doorAutoClose" type="number" min="5" max="600" value="${state.forms.doorAutoClose}">
-        </label>
-        <button class="btn btn-secondary" data-command-action="unlock-lockout">${icon('shield', 18)}Giải khóa truy cập</button>
+        ${isSystemLockout() ? `<button class="btn btn-secondary" data-command-action="unlock-lockout">${icon('shield', 18)}Giải khóa truy cập</button>` : ''}
       `)}
       ${ControlPanelCard('Gara', 'garage', h`
-        <div class="state-line"><strong>${displayState('garage', state.sensor.gara)}</strong><span>${formatDistance(state.sensor.dist)} · ngưỡng 7cm</span></div>
+        <div class="state-line"><strong>${displayState('garage', state.sensor.gara)}</strong><span>${garageCountdownText() || `${formatDistance(state.sensor.dist)} · ngưỡng 7cm`}</span></div>
         ${garageOpenTooLong() ? '<div class="alert warning">Gara đang mở lâu hơn 2 phút. Hãy kiểm tra trước khi rời nhà.</div>' : ''}
         ${ModeSwitch('garage', state.sensor.garageMode, [
           ['AUTO', 'Tự động', 'garage-auto'],
@@ -421,7 +449,7 @@ function ControlsPage() {
           <input data-form="lightHold" type="number" min="1" max="600" value="${state.forms.lightHold}">
         </label>
         <p class="hint">Ở chế độ tự động, đèn sẽ bật khi phát hiện chuyển động.</p>
-        <button class="btn btn-primary full-width" data-command-action="light-settings">${icon('settings', 18)}Lưu cấu hình đèn</button>
+        <p class="hint">Cấu hình đèn được tự động gửi xuống ESP32 sau khi bạn thay đổi.</p>
       `)}
       ${ControlPanelCard('Quạt môi trường', 'fan', h`
         <div class="state-line"><strong>${displayState('fan', state.sensor.fan)} · ${state.sensor.fanPct || 0}%</strong><span>Chế độ ${displayMode(state.sensor.fanMode)}</span></div>
@@ -429,32 +457,37 @@ function ControlsPage() {
           <label>Chế độ
             <select data-form="fanMode">
               ${option('auto', 'Tự động', state.forms.fanMode)}
-              ${option('manual', 'Thủ công', state.forms.fanMode)}
+              ${option('on', 'Bật', state.forms.fanMode)}
               ${option('off', 'Tắt', state.forms.fanMode)}
             </select>
           </label>
           <label>Hướng quay
-            <select data-form="fanDir">
+            <select data-form="fanDir" ${state.forms.fanMode === 'off' ? 'disabled' : ''}>
               ${option(1, 'Thuận', state.forms.fanDir)}
               ${option(-1, 'Ngược', state.forms.fanDir)}
-              ${option(0, 'Dừng', state.forms.fanDir)}
             </select>
           </label>
         </div>
         <label>Tốc độ quạt: <strong>${state.forms.fanSpeed}%</strong>
-          <input data-form="fanSpeed" type="range" min="0" max="100" value="${state.forms.fanSpeed}">
+          <input data-form="fanSpeed" type="range" min="1" max="100" value="${state.forms.fanSpeed}" ${state.forms.fanMode === 'off' ? 'disabled' : ''}>
         </label>
         <div class="threshold-grid">
           ${NumberInput('temperatureOnThreshold', 'Nhiệt bật', '°C')}
           ${NumberInput('temperatureOffThreshold', 'Nhiệt tắt', '°C')}
-          ${NumberInput('humidityOnThreshold', 'Ẩm bật', '%')}
-          ${NumberInput('humidityOffThreshold', 'Ẩm tắt', '%')}
+          ${NumberInput('humidityOnThreshold', 'Ẩm thấp bật', '%')}
+          ${NumberInput('humidityOffThreshold', 'Ẩm hồi tắt', '%')}
         </div>
-        <p class="hint">Quạt bật khi nhiệt độ hoặc độ ẩm vượt ngưỡng, và tắt khi cả hai đã ổn định.</p>
-        <div class="control-row">
-          <button class="btn btn-secondary" data-command-action="fan-settings">${icon('settings', 18)}Lưu ngưỡng</button>
-          <button class="btn btn-primary" data-command-action="fan-apply">${icon('fan', 18)}Áp dụng quạt</button>
-        </div>
+        ${fanThresholdsValid() ? '' : '<div class="alert warning">Ngưỡng chưa hợp lệ: nhiệt bật phải lớn hơn nhiệt tắt, và ẩm hồi tắt phải lớn hơn ẩm thấp bật.</div>'}
+        <p class="hint">Ngưỡng quạt, chế độ và tốc độ được tự động gửi xuống ESP32 sau khi bạn thay đổi. Ở chế độ Tự động, ESP32 chỉ tự quyết định bật/tắt và hướng quay theo ngưỡng; tốc độ chạy dùng đúng tốc độ bạn chỉnh ở thanh trượt.</p>
+      `)}
+      ${ControlPanelCard('Tự đóng cửa', 'settings', h`
+        <div class="state-line"><strong>${state.forms.autoCloseSeconds}s</strong><span>Dùng chung cho cửa chính và gara</span></div>
+        ${anyDoorOpen ? '<div class="alert warning">Đang có cửa mở. Hãy chờ cửa đóng rồi mới chỉnh thời gian tự đóng.</div>' : ''}
+        <label>Thời gian tự đóng
+          <div class="input-suffix"><input data-form="autoCloseSeconds" type="number" min="1" max="600" value="${state.forms.autoCloseSeconds}" ${anyDoorOpen ? 'disabled' : ''}><span>giây</span></div>
+        </label>
+        <p class="hint">Cấu hình này được sync xuống ESP32 và áp dụng cho cả servo cửa chính lẫn servo gara.</p>
+        <button class="btn btn-primary full-width" data-command-action="auto-close-settings" ${anyDoorOpen ? 'disabled' : ''}>${icon('settings', 18)}Lưu thời gian tự đóng</button>
       `)}
     </div>
   `;
@@ -480,9 +513,9 @@ function AccessManagementPage() {
                 <td><code>${escapeHtml(card.uid)}</code></td>
                 <td>${targetLabel(card.target)}</td>
                 <td>${AccessPolicyView(card)}</td>
-                <td><span class="pill ${card.enabled ? 'success' : ''}">${card.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                <td><span class="pill status-pill ${accessStatusTone(card.status)}">${accessStatusLabel(card.status)}</span></td>
                 <td>${card.updatedAt}</td>
-                <td class="row-actions"><button class="icon-btn" data-card-edit="${card.id}" title="Đổi tên">${icon('settings', 16)}</button><button class="icon-btn danger" data-card-delete="${card.id}" title="Xóa">${icon('trash', 16)}</button></td>
+                <td class="row-actions"><button class="icon-btn" data-card-edit="${card.id}" title="Cấu hình thẻ">${icon('settings', 16)}</button><button class="icon-btn danger" data-card-delete="${card.id}" title="Xóa">${icon('trash', 16)}</button></td>
               </tr>
             `).join('')}</tbody>
           </table>
@@ -495,6 +528,7 @@ function AccessManagementPage() {
             <div class="list-card">
               <div><strong>${escapeHtml(p.name)}</strong><span>${p.type} · ${targetLabel(p.target)}</span>${AccessPolicyView(p)}</div>
               <span class="pill status-pill ${p.status === 'active' ? 'success' : p.status === 'expired' ? 'danger' : ''}">${p.status}</span>
+              <button class="icon-btn" data-password-edit="${p.id}" title="Cấu hình mật khẩu">${icon('settings', 15)}</button>
               ${p.type === 'master' ? '' : `<button class="icon-btn danger" data-password-delete="${p.id}" title="Xóa">${icon('trash', 15)}</button>`}
             </div>
           `).join('')}
@@ -503,54 +537,64 @@ function AccessManagementPage() {
       </section>
       <section class="card">
         <div class="section-head"><div><p class="eyebrow">Access Logs</p><h3>Log truy cập</h3></div></div>
-        <div class="filter-row">
-          <select><option>source: tất cả</option><option>rfid</option><option>keypad</option><option>web_app</option></select>
-          <select><option>target: tất cả</option><option>mainDoor</option><option>garageDoor</option></select>
-          <select><option>type: tất cả</option><option>success</option><option>failed</option><option>lockout</option></select>
+        <div class="filter-row logs-date-filter">
+          <label>Ngày
+            <input data-form="logsDate" type="date" value="${escapeHtml(state.forms.logsDate || '')}">
+          </label>
+          ${state.forms.logsDate ? `<button class="btn btn-ghost" data-action="clear-log-date">Xem tất cả</button>` : ''}
         </div>
-        ${EventTimeline(state.events.filter(e => ['access_success', 'access_failed', 'access_lockout', 'remote_command'].includes(e.type)).slice(0, 8))}
+        ${EventTimeline(filteredAccessEvents().slice(0, 10))}
       </section>
     </div>
   `;
 }
 
 function AnalyticsPage() {
+  const view = analyticsView();
   return h`
     <div class="page-grid">
       <section class="card span-2">
         <div class="section-head">
-          <div><p class="eyebrow">Bộ lọc thời gian</p><h3>Phân tích vận hành</h3></div>
-          <div class="segmented compact">${['today', '7d', '30d', 'custom'].map(v => `<button data-filter="${v}" class="${state.forms.timeFilter === v ? 'is-active' : ''}">${filterLabel(v)}</button>`).join('')}</div>
+          <div><p class="eyebrow">Bộ lọc thời gian</p><h3>${view.title}</h3></div>
+          <div class="analytics-filter">
+            <div class="segmented compact">${['1d', '7d', '30d'].map(v => `<button data-filter="${v}" class="${state.forms.timeFilter === v ? 'is-active' : ''}">${filterLabel(v)}</button>`).join('')}</div>
+            <label class="date-picker-label ${view.mode !== '1d' ? 'is-muted' : ''}">Ngày
+              <input data-form="selectedAnalyticsDate" type="date" value="${escapeHtml(state.forms.selectedAnalyticsDate || todayDateId())}">
+            </label>
+          </div>
         </div>
         <div class="stat-grid">
-          ${StatCard('Mở cửa chính', state.stats.unlocks || 0, 'lần hôm nay', 'door')}
-          ${StatCard('Mở gara', state.stats.garageEvents || 0, 'lần hôm nay', 'garage')}
-          ${StatCard('Nhập sai', state.stats.failedAccess || state.stats.failedCommands || 0, 'lần truy cập lỗi', 'shield')}
-          ${StatCard('Lockout', state.stats.lockouts || 0, 'cảnh báo', 'lock')}
+          ${StatCard('Mở cửa chính', view.totals.unlocks || 0, view.detail, 'door')}
+          ${StatCard('Mở gara', view.totals.garageEvents || 0, view.detail, 'garage')}
+          ${StatCard('Nhập sai', view.totals.failedAccess || 0, 'lần truy cập lỗi', 'shield')}
+          ${StatCard('Lockout', view.totals.lockouts || 0, 'cảnh báo', 'lock')}
         </div>
       </section>
-      ${ChartCard('Nhiệt độ theo giờ', '°C', hourlyStatSeries('avgTemperature', 'temp'), 'thermometer')}
-      ${ChartCard('Độ ẩm theo giờ', '%', hourlyStatSeries('avgHumidity', 'humidity'), 'droplet')}
-      ${ChartCard('Thời gian bật quạt theo ngày', 'phút', dailyStatSeries('fanOnMinutes', 'fanMinutes'), 'fan', true)}
-      ${ChartCard('Thời gian bật đèn theo ngày', 'phút', dailyStatSeries('lightOnMinutes', 'lightMinutes'), 'light', true)}
+      ${ChartCard(`Nhiệt độ ${view.suffix}`, '°C', analyticsSeries('avgTemperature', 'line'), 'thermometer')}
+      ${ChartCard(`Độ ẩm ${view.suffix}`, '%', analyticsSeries('avgHumidity', 'line'), 'droplet')}
+      ${ChartCard(`Thời gian bật quạt ${view.suffix}`, 'phút', analyticsSeries('fanOnMinutes', 'bar'), 'fan', true)}
+      ${ChartCard(`Thời gian bật đèn ${view.suffix}`, 'phút', analyticsSeries('lightOnMinutes', 'bar'), 'light', true)}
+      ${ChartCard(`Nhập sai ${view.suffix}`, 'lần', analyticsSeries('failedAccess', 'bar'), 'shield', true)}
+      ${ChartCard(`Lockout ${view.suffix}`, 'lần', analyticsSeries('lockouts', 'bar'), 'lock', true)}
     </div>
   `;
 }
 
 function LogsPage() {
+  const events = filteredLogEvents();
   return h`
     <section class="card">
       <div class="section-head">
         <div><p class="eyebrow">Event Timeline</p><h3>Lịch sử hệ thống</h3></div>
         <button class="btn btn-secondary" data-action="refresh">${icon('sync', 18)}Làm mới</button>
       </div>
-      <div class="filter-row">
-        <select><option>event type: tất cả</option><option>access_success</option><option>access_failed</option><option>device_state_changed</option></select>
-        <select><option>target: tất cả</option><option>mainDoor</option><option>garageDoor</option><option>hallwayLight</option></select>
-        <select><option>source: tất cả</option><option>rfid</option><option>keypad</option><option>web_app</option><option>system</option></select>
-        <input type="date">
+      <div class="filter-row logs-date-filter">
+        <label>Ngày
+          <input data-form="logsDate" type="date" value="${escapeHtml(state.forms.logsDate || '')}">
+        </label>
+        ${state.forms.logsDate ? `<button class="btn btn-ghost" data-action="clear-log-date">Xem tất cả</button>` : ''}
       </div>
-      ${EventTimeline(state.events)}
+      ${EventTimeline(events)}
     </section>
   `;
 }
@@ -559,7 +603,6 @@ function SettingsPage() {
   return h`
     <div class="settings-grid">
       ${SettingsCard('Cấu hình hệ thống', [['Tên hệ thống', 'SmartHome Control Center'], ['Timezone', 'Asia/Ho_Chi_Minh'], ['Config version', 'v1.0.0']])}
-      ${SettingsCard('Lockout', [['Số lần sai trước khi khóa', '5'], ['Thời gian khóa ban đầu', '30 giây'], ['Hệ số nhân thời gian khóa', '2x']])}
       ${SettingsCard('Offline sync', [['Offline mode', 'Bật'], ['Event lưu tạm tối đa', '500'], ['Sync policy', 'Khi ESP32 online']])}
       <section class="card">
         <div class="section-head"><div><p class="eyebrow">ESP32</p><h3>Thiết bị gateway</h3></div>${StatusBadge()}</div>
@@ -577,10 +620,14 @@ function SettingsPage() {
           <div><span>Người dùng</span><strong>${escapeHtml(state.user?.displayName || state.user?.username)}</strong></div>
           <div><span>Role</span><strong>${escapeHtml(state.user?.role || 'owner')}</strong></div>
         </div>
-        <div class="form-grid two">
-          <label>Mật khẩu mới<input type="password" placeholder="Chưa kết nối API đổi mật khẩu"></label>
-          <label>Xác nhận mật khẩu<input type="password" placeholder="Nhập lại mật khẩu"></label>
-        </div>
+        <form id="change-password-form" class="form-stack compact-form">
+          <div class="form-grid three">
+            <label>Mật khẩu hiện tại<input name="currentPassword" type="password" autocomplete="current-password" required></label>
+            <label>Mật khẩu mới<input name="newPassword" type="password" minlength="8" maxlength="64" autocomplete="new-password" required></label>
+            <label>Xác nhận mật khẩu<input name="confirmPassword" type="password" minlength="8" maxlength="64" autocomplete="new-password" required></label>
+          </div>
+          <button class="btn btn-primary" type="submit">${icon('lock', 18)}Đổi mật khẩu</button>
+        </form>
       </section>
     </div>
   `;
@@ -623,14 +670,36 @@ function ControlPanelCard(title, iconName, body) {
   `;
 }
 
+function isSystemLockout() {
+  const doorState = String(state.sensor?.door || '').toUpperCase();
+  const sysState = String(state.sensor?.sysState || state.sensor?.systemState || '').toUpperCase();
+  return Date.now() < Number(state.securityLockoutUntil || 0)
+    || doorState === 'LOCKED_OUT'
+    || sysState === 'LOCKOUT'
+    || state.sensor?.lockout === true;
+}
+
+function setSecurityLockout(seconds = 30) {
+  const sec = Math.max(1, Math.min(600, Number(seconds) || 30));
+  state.securityLockoutUntil = Date.now() + sec * 1000;
+  state.sensor = { ...(state.sensor || {}), lockout: true, door: state.sensor?.door === 'OPEN' ? 'OPEN' : 'LOCKED_OUT' };
+}
+
+function clearSecurityLockout() {
+  state.securityLockoutUntil = 0;
+  if (state.sensor) state.sensor = { ...state.sensor, lockout: false, door: state.sensor.door === 'LOCKED_OUT' ? 'CLOSED' : state.sensor.door };
+}
+
 function ModeSwitch(name, current, options) {
   const activeIndex = Math.max(0, options.findIndex(([value]) => value === current));
-  const locked = state.esp32.status !== 'online' || Date.now() < state.commandLockedUntil;
+  const lockoutBlocked = isSystemLockout() && name === 'garage';
+  const locked = state.esp32.status !== 'online' || Date.now() < state.commandLockedUntil || lockoutBlocked;
+  const title = lockoutBlocked ? 'Hệ thống đang lockout, chỉ có thể giải khóa truy cập' : '';
   return h`
     <div class="mode-switch ${name} index-${activeIndex}" role="group" aria-label="${name} mode">
       <span class="mode-switch-thumb"></span>
       ${options.map(([value, label, action]) => `
-        <button data-command-action="${action}" class="${value === current ? 'is-active' : ''}" ${locked ? 'disabled' : ''}>${label}</button>
+        <button data-command-action="${action}" class="${value === current ? 'is-active' : ''}" ${locked ? 'disabled' : ''} title="${title}">${label}</button>
       `).join('')}
     </div>
   `;
@@ -638,15 +707,24 @@ function ModeSwitch(name, current, options) {
 
 function ActionButton(label, action, iconName, dangerConfirm) {
   const offline = state.esp32.status !== 'online';
-  const locked = Date.now() < state.commandLockedUntil;
+  const cooldownLocked = Date.now() < state.commandLockedUntil;
   const pending = state.pendingCommand === action;
+  const lockoutBlockedActions = ['door-open', 'door-close', 'garage-open', 'garage-close'];
+  const lockoutBlocked = isSystemLockout() && lockoutBlockedActions.includes(action);
+  const disabled = offline || cooldownLocked || pending || lockoutBlocked;
   const className = dangerConfirm ? 'btn btn-danger-soft' : action.includes('open') ? 'btn btn-primary' : 'btn btn-secondary';
-  return `<button class="${className}" data-command-action="${action}" ${offline || locked || pending ? 'disabled' : ''} title="${offline ? 'ESP32 offline, không thể gửi lệnh' : ''}">${pending ? '<span class="spinner"></span>' : icon(iconName, 18)}${label}</button>`;
+  const title = offline
+    ? 'ESP32 offline, không thể gửi lệnh'
+    : lockoutBlocked
+      ? 'Hệ thống đang lockout, chỉ để nút giải khóa truy cập'
+      : '';
+  return `<button class="${className}" data-command-action="${action}" ${disabled ? 'disabled' : ''} title="${title}">${pending ? '<span class="spinner"></span>' : icon(iconName, 18)}${label}</button>`;
 }
 
 function ModalDialog(dialog) {
   if (dialog.kind === 'card-form') return CardFormDialog(dialog);
   if (dialog.kind === 'password-form') return PasswordFormDialog(dialog);
+  if (dialog.kind === 'chart-zoom') return ChartZoomDialog(dialog);
   return ConfirmDialog(dialog);
 }
 
@@ -669,6 +747,7 @@ function ConfirmDialog(dialog) {
 function CardFormDialog(dialog) {
   const card = dialog.card || {};
   const isEdit = !!card.id;
+  const accessType = card.accessType || 'full_time';
   return h`
     <div class="modal-layer">
       <section class="form-dialog">
@@ -698,6 +777,7 @@ function CardFormDialog(dialog) {
               ${option('false', 'Disabled', String(card.enabled !== false))}
             </select>
           </label>
+          ${AccessPolicyFields(card, true)}
           <div class="modal-actions">
             <button type="button" class="btn btn-ghost" data-action="close-dialog">Hủy</button>
             <button class="btn btn-primary" type="submit">${icon('check', 18)}${dialog.enroll ? 'Bật ghi thẻ' : isEdit ? 'Lưu thẻ' : 'Thêm thẻ'}</button>
@@ -708,35 +788,37 @@ function CardFormDialog(dialog) {
   `;
 }
 
-function PasswordFormDialog() {
+function PasswordFormDialog(dialog = {}) {
+  const password = dialog.password || {};
+  const isEdit = !!password.id;
+  const isMaster = password.type === 'master';
   return h`
     <div class="modal-layer">
       <section class="form-dialog">
         <div class="modal-head">
           <div class="modal-icon">${icon('lock', 22)}</div>
-          <div><p class="eyebrow">Keypad</p><h3>Tạo mật khẩu truy cập</h3></div>
+          <div><p class="eyebrow">Keypad</p><h3>${isEdit ? 'Cập nhật mật khẩu' : 'Tạo mật khẩu truy cập'}</h3></div>
           <button class="icon-btn" data-action="close-dialog" title="Đóng">${icon('x', 16)}</button>
         </div>
         <form id="password-form" class="form-stack">
           <label>Mật khẩu/PIN mới
-            <input name="password" type="password" minlength="4" maxlength="16" autocomplete="new-password" required>
+            <input name="password" type="password" minlength="4" maxlength="16" autocomplete="new-password" ${isEdit ? 'placeholder="Để trống nếu không đổi"' : 'required'}>
           </label>
           <label>Tên mật khẩu
-            <input name="name" value="Mật khẩu tạm" required>
+            <input name="name" value="${escapeHtml(password.name || 'Mật khẩu tạm')}" required>
           </label>
-          <label>Hiệu lực
-            <select name="durationMode">
-              <option value="full_time">Dùng toàn thời gian</option>
-              <option value="minutes">Giới hạn theo phút</option>
+          <label>Loại mật khẩu
+            <select name="type" ${isMaster ? 'disabled' : ''}>
+              ${option('temporary', 'Mật khẩu giới hạn', password.type || 'temporary')}
+              ${option('guest', 'Mật khẩu khách/OTP', password.type || 'temporary')}
+              ${isMaster ? option('master', 'Master full-time', 'master') : ''}
             </select>
           </label>
-          <label>Số phút hiệu lực
-            <input name="relativeMinutes" type="number" min="1" max="1440" placeholder="Bỏ trống nếu toàn thời gian">
-          </label>
+          ${isMaster ? '<p class="hint">Master luôn có quyền toàn thời gian và không tự hết hạn.</p>' : AccessPolicyFields(password, true)}
           <p class="hint">Mật khẩu được lưu dạng hash trong Firestore, dashboard không hiển thị lại plain text.</p>
           <div class="modal-actions">
             <button type="button" class="btn btn-ghost" data-action="close-dialog">Hủy</button>
-            <button class="btn btn-primary" type="submit">${icon('check', 18)}Tạo mật khẩu</button>
+            <button class="btn btn-primary" type="submit">${icon('check', 18)}${isEdit ? 'Lưu mật khẩu' : 'Tạo mật khẩu'}</button>
           </div>
         </form>
       </section>
@@ -744,15 +826,58 @@ function PasswordFormDialog() {
   `;
 }
 
+function AccessPolicyFields(item = {}, includeRelative = false) {
+  // Quyền truy cập chỉ còn 3 loại:
+  // - Toàn thời gian
+  // - Theo khung giờ mỗi ngày
+  // - Theo khoảng ngày
+  // Không còn tuỳ chỉnh thời hạn, hết hạn sau X phút, hoặc tự đóng riêng theo từng RFID/keypad.
+  const accessType = item.accessType || 'full_time';
+  const timeWindow = item.timeWindow || {};
+  const dateRange = item.dateRange || {};
+  return h`
+    <div class="policy-panel policy-${accessType}">
+      <label>Quyền truy cập
+        <select name="accessType">
+          ${option('full_time', 'Toàn thời gian', accessType)}
+          ${option('time_window', 'Theo khung giờ mỗi ngày', accessType)}
+          ${option('date_range', 'Theo khoảng ngày', accessType)}
+        </select>
+      </label>
+      <div class="form-grid two policy-time-window">
+        <label>Bắt đầu giờ
+          <input name="startTime" type="time" value="${escapeHtml(timeWindow.start || '08:00')}">
+        </label>
+        <label>Kết thúc giờ
+          <input name="endTime" type="time" value="${escapeHtml(timeWindow.end || '18:00')}">
+        </label>
+      </div>
+      <div class="form-grid two policy-date-range">
+        <label>Từ ngày
+          <input name="startDate" type="datetime-local" value="${datetimeLocalValue(dateRange.startIso)}">
+        </label>
+        <label>Đến ngày
+          <input name="endDate" type="datetime-local" value="${datetimeLocalValue(dateRange.endIso)}">
+        </label>
+      </div>
+    </div>
+  `;
+}
+
 function AccessPolicyView(item) {
-  if (item.expiresAtIso) return `<div class="access-policy warning">${icon('lock', 14)}Hết hạn ${timeLabel(item.expiresAtIso)}</div>`;
+  let base = 'Toàn thời gian';
+  let tone = 'success';
+  let iconName = 'check';
   if (item.accessType === 'time_window' && item.timeWindow) {
-    return `<div class="access-policy info">${icon('activity', 14)}${escapeHtml(item.timeWindow.start || '--:--')} - ${escapeHtml(item.timeWindow.end || '--:--')}</div>`;
+    base = `${escapeHtml(item.timeWindow.start || '--:--')} - ${escapeHtml(item.timeWindow.end || '--:--')}`;
+    tone = 'info';
+    iconName = 'activity';
+  } else if (item.accessType === 'date_range' && item.dateRange) {
+    base = `${shortDateLabel(item.dateRange.startIso)} - ${shortDateLabel(item.dateRange.endIso)}`;
+    tone = 'info';
+    iconName = 'chart';
   }
-  if (item.accessType === 'date_range' && item.dateRange) {
-    return `<div class="access-policy info">${icon('chart', 14)}${shortDateLabel(item.dateRange.startIso)} - ${shortDateLabel(item.dateRange.endIso)}</div>`;
-  }
-  return `<div class="access-policy success">${icon('check', 14)}Toàn thời gian</div>`;
+  return `<div class="access-policy ${tone}">${icon(iconName, 14)}${base}</div>`;
 }
 
 function EventTimeline(events, compact = false) {
@@ -761,7 +886,7 @@ function EventTimeline(events, compact = false) {
     <article class="timeline-item ${eventTone(event.type)}">
       <span class="timeline-dot">${icon(eventIcon(event.type), 15)}</span>
       <div>
-        <div class="timeline-top"><strong>${eventTypeLabel(event.type)}</strong><time>${escapeHtml(event.time)}</time></div>
+        <div class="timeline-top"><strong>${eventTypeLabel(event.type)}</strong><time>${escapeHtml(eventDisplayTime(event))}</time></div>
         <p>${escapeHtml(event.message)}</p>
         <span class="muted">${escapeHtml(event.source)} · ${escapeHtml(event.target || 'system')}</span>
       </div>
@@ -774,8 +899,10 @@ function StatCard(title, value, detail, iconName) {
 }
 
 function ChartCard(title, unit, series, iconName, bars = false) {
+  const chartId = cryptoId();
+  chartRegistry.set(chartId, { title, unit, series, iconName, bars });
   return h`
-    <section class="card chart-card">
+    <section class="card chart-card" data-chart-open="${chartId}" role="button" tabindex="0">
       <div class="section-head"><div class="control-title">${icon(iconName, 21)}<h3>${title}</h3></div><span class="pill">${unit}</span></div>
       ${series?.length ? MiniChart(series, bars, unit) : '<div class="empty-state">Chưa có dữ liệu.</div>'}
     </section>
@@ -787,18 +914,53 @@ function MiniChart(series, bars, unit) {
   const max = Math.max(...values, 1);
   const min = Math.min(...values, 0);
   if (bars) {
-    return `<div class="chart-frame"><div class="bar-chart">${series.map(point => `<span style="height:${Math.max(10, (point.value / max) * 100)}%" title="${point.label}: ${point.value}${unit}"></span>`).join('')}</div>${ChartAxis(series, unit)}</div>`;
+    const labelIndexes = barExtremeLabelIndexes(series);
+    return `<div class="chart-frame">${ChartYAxis(0, max, unit)}<div class="chart-plot"><div class="bar-chart bar-chart-values">${series.map((point, index) => {
+      const numericValue = Number(point.value) || 0;
+      const height = numericValue > 0 ? Math.max(10, (numericValue / max) * 100) : 0;
+      const fullLabel = `${formatChartValue(numericValue)}${unit}`;
+      const shortLabel = formatChartValue(numericValue);
+      const valueLabel = labelIndexes.has(index) ? `<em class="bar-value" style="bottom:calc(${height}% + 6px)">${shortLabel}</em>` : '';
+      return `<span class="bar-item" title="${point.label}: ${fullLabel}${point.anomaly ? ' · cần chú ý' : ''}">${valueLabel}<i class="bar-fill ${chartPointClass(point)}" style="height:${height}%"></i></span>`;
+    }).join('')}</div></div>${ChartAxis(series, unit)}</div>`;
   }
   const points = series.map((point, i) => {
     const x = (i / (series.length - 1 || 1)) * 100;
     const y = 90 - ((point.value - min) / (max - min || 1)) * 75;
     return `${x},${y}`;
   }).join(' ');
-  return `<div class="chart-frame"><svg class="line-chart" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${points}"/></svg><div class="chart-points">${series.map((point, i) => {
+  return `<div class="chart-frame">${ChartYAxis(min, max, unit)}<div class="chart-plot"><svg class="line-chart" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${points}"/></svg><div class="chart-points">${series.map((point, i) => {
     const x = (i / (series.length - 1 || 1)) * 100;
     const y = 90 - ((point.value - min) / (max - min || 1)) * 75;
-    return `<span style="left:${x}%;top:${y}%" title="${point.label}: ${point.value}${unit}"></span>`;
-  }).join('')}</div>${ChartAxis(series, unit)}</div>`;
+    return `<span class="${chartPointClass(point)}" style="left:${x}%;top:${y}%" title="${point.label}: ${point.value}${unit}${point.anomaly ? ' · cần chú ý' : ''}"></span>`;
+  }).join('')}</div></div>${ChartAxis(series, unit)}</div>`;
+}
+
+function chartPointClass(point = {}) {
+  return cls(point.noData && 'is-no-data', point.anomaly && 'is-anomaly', point.period && `period-${point.period}`);
+}
+
+function ChartZoomDialog(dialog) {
+  const chart = dialog.chart || {};
+  return h`
+    <div class="modal-layer">
+      <section class="form-dialog chart-dialog">
+        <div class="modal-head">
+          <div class="modal-icon">${icon(chart.iconName || 'chart', 22)}</div>
+          <div><p class="eyebrow">Phóng to biểu đồ</p><h3>${escapeHtml(chart.title || 'Biểu đồ')}</h3></div>
+          <button class="icon-btn" data-action="close-dialog" title="Đóng">${icon('x', 16)}</button>
+        </div>
+        ${chart.series?.length ? MiniChart(chart.series, chart.bars, chart.unit || '') : '<div class="empty-state">Chưa có dữ liệu.</div>'}
+        <div class="chart-legend">
+          <span><i class="legend-dot no-data"></i>Không có data</span>
+          <span><i class="legend-dot morning"></i>Sáng</span>
+          <span><i class="legend-dot afternoon"></i>Chiều</span>
+          <span><i class="legend-dot night"></i>Tối/đêm</span>
+          <span><i class="legend-dot anomaly"></i>Cần chú ý</span>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function ChartAxis(series, unit) {
@@ -806,12 +968,79 @@ function ChartAxis(series, unit) {
   const mid = series[Math.floor(series.length / 2)];
   const last = series[series.length - 1];
   return h`
-    <div class="chart-axis">
-      <span><strong>${first.value}${unit}</strong>${first.label}</span>
-      <span><strong>${mid.value}${unit}</strong>${mid.label}</span>
-      <span><strong>${last.value}${unit}</strong>${last.label}</span>
+    <div class="chart-axis time-only">
+      <span>${first.label}</span>
+      <span>${mid.label}</span>
+      <span>${last.label}</span>
     </div>
   `;
+}
+
+function ChartYAxis(min, max, unit) {
+  const mid = (Number(min) + Number(max)) / 2;
+  const suffix = unit === 'lần' ? '' : unit;
+  return h`
+    <div class="chart-y-axis">
+      <span>${formatChartValue(max)}${suffix}</span>
+      <span>${formatChartValue(mid)}${suffix}</span>
+      <span>${formatChartValue(min)}${suffix}</span>
+    </div>
+  `;
+}
+
+function formatChartValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0';
+  return Math.abs(n) >= 10 || Number.isInteger(n) ? String(Math.round(n)) : String(Math.round(n * 10) / 10);
+}
+
+
+function barExtremeLabelIndexes(series = []) {
+  const nonZero = series
+    .map((point, index) => ({ index, value: Number(point?.value) || 0 }))
+    .filter(item => item.value > 0);
+  if (!nonZero.length) return new Set();
+  const maxValue = Math.max(...nonZero.map(item => item.value));
+  const minValue = Math.min(...nonZero.map(item => item.value));
+  const indexes = new Set();
+  indexes.add(nonZero.find(item => item.value === maxValue).index);
+  indexes.add(nonZero.find(item => item.value === minValue).index);
+  return indexes;
+}
+
+function eventDateId(event = {}) {
+  const raw = event.createdAtIso || event.updatedAtIso || event.date || '';
+  if (raw) {
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) {
+      const d = new Date(parsed);
+      const offset = d.getTimezoneOffset() * 60000;
+      return new Date(d.getTime() - offset).toISOString().slice(0, 10);
+    }
+    const match = String(raw).match(/\d{4}-\d{2}-\d{2}/);
+    if (match) return match[0];
+  }
+  return todayDateId();
+}
+
+function eventDisplayTime(event = {}) {
+  const raw = event.createdAtIso || event.updatedAtIso || event.time;
+  if (raw && raw !== event.time) return dateTimeLabel(raw);
+  if (event.date) return `${shortDateLabel(event.date)} ${event.time || ''}`.trim();
+  return event.time || nowTime();
+}
+
+function filteredLogEvents() {
+  const date = state.forms.logsDate;
+  const events = date ? state.events.filter(event => eventDateId(event) === date) : state.events;
+  return events;
+}
+
+function filteredAccessEvents() {
+  return filteredLogEvents().filter(event =>
+    ['access_success', 'access_failed', 'access_lockout', 'remote_command'].includes(event.type)
+    || (event.type === 'device_state_changed' && event.target === 'garageDoor')
+  );
 }
 
 function SettingsCard(title, rows) {
@@ -831,6 +1060,52 @@ function option(value, label, selected) {
   return `<option value="${value}" ${String(value) === String(selected) ? 'selected' : ''}>${label}</option>`;
 }
 
+function toIsoFromLocal(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function datetimeLocalValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function accessPolicyFromForm(form) {
+  const accessType = form.get('accessType') || 'full_time';
+  const body = {
+    accessType,
+    expiresAtIso: null,
+  };
+
+  if (accessType === 'time_window') {
+    body.timeWindow = {
+      start: String(form.get('startTime') || '08:00'),
+      end: String(form.get('endTime') || '18:00'),
+    };
+  }
+  if (accessType === 'date_range') {
+    body.dateRange = {
+      startIso: toIsoFromLocal(form.get('startDate')),
+      endIso: toIsoFromLocal(form.get('endDate')),
+    };
+  }
+  return body;
+}
+
+function updatePolicyPanelVisibility(panel) {
+  if (!panel) return;
+  const accessSelect = panel.querySelector('select[name="accessType"]');
+  const type = accessSelect?.value || 'full_time';
+  panel.className = panel.className.replace(/policy-(full_time|time_window|date_range|custom)/g, '').trim();
+  panel.classList.add(`policy-${type}`);
+  panel.querySelectorAll('.policy-time-window').forEach(el => { el.style.display = type === 'time_window' ? '' : 'none'; });
+  panel.querySelectorAll('.policy-date-range').forEach(el => { el.style.display = type === 'date_range' ? '' : 'none'; });
+}
+
 function bindEvents() {
   document.querySelectorAll('[data-nav]').forEach(el => {
     el.addEventListener('click', () => setState({ activePage: el.dataset.nav, sidebarOpen: false }));
@@ -840,10 +1115,28 @@ function bindEvents() {
   document.querySelectorAll('[data-action="close-sidebar"], .scrim').forEach(el => el.addEventListener('click', () => setState({ sidebarOpen: false })));
   document.querySelectorAll('[data-action="close-dialog"]').forEach(el => el.addEventListener('click', () => setState({ dialog: null })));
   document.querySelectorAll('[data-action="refresh"]').forEach(el => el.addEventListener('click', refreshAll));
+  document.querySelectorAll('[data-action="clear-log-date"]').forEach(el => el.addEventListener('click', () => setNestedForm('logsDate', '')));
   document.querySelectorAll('[data-filter]').forEach(el => el.addEventListener('click', () => setNestedForm('timeFilter', el.dataset.filter)));
   document.querySelectorAll('[data-form]').forEach(el => {
     el.addEventListener('input', () => setNestedForm(el.dataset.form, el.value, true));
-    el.addEventListener('change', () => setNestedForm(el.dataset.form, el.value));
+    el.addEventListener('change', () => {
+      if (el.dataset.form === 'selectedAnalyticsDate') state.forms.timeFilter = '1d';
+      setNestedForm(el.dataset.form, el.value);
+      if (el.dataset.form === 'selectedAnalyticsDate') refreshDailyStats().then(render);
+      if (el.dataset.form === 'logsDate') refreshEvents().then(render);
+      if (el.dataset.form === 'fanMode' || ((el.dataset.form === 'fanDir' || el.dataset.form === 'fanSpeed') && state.forms.fanMode !== 'off')) autoApplyDeviceConfig('fan-apply');
+      if (['temperatureOnThreshold', 'temperatureOffThreshold', 'humidityOnThreshold', 'humidityOffThreshold'].includes(el.dataset.form) && fanThresholdsValid()) autoApplyDeviceConfig('fan-settings');
+      if (['lightBrightness', 'lightEffect', 'lightHold'].includes(el.dataset.form)) autoApplyDeviceConfig('light-settings');
+    });
+  });
+  document.querySelectorAll('.policy-panel').forEach(updatePolicyPanelVisibility);
+  document.querySelectorAll('select[name="accessType"]').forEach(el => {
+    el.addEventListener('change', () => {
+      const panel = el.closest('.policy-panel');
+      if (!panel) return;
+      if (el.name === 'accessType') panel.className = `policy-panel policy-${el.value}`;
+      updatePolicyPanelVisibility(panel);
+    });
   });
   document.querySelectorAll('[data-command-action]').forEach(el => {
     el.addEventListener('click', () => handleCommandAction(el.dataset.commandAction));
@@ -868,6 +1161,8 @@ function bindEvents() {
   if (cardForm) cardForm.addEventListener('submit', submitCardForm);
   const passwordForm = document.getElementById('password-form');
   if (passwordForm) passwordForm.addEventListener('submit', submitPasswordForm);
+  const changePasswordForm = document.getElementById('change-password-form');
+  if (changePasswordForm) changePasswordForm.addEventListener('submit', submitChangePasswordForm);
   document.querySelectorAll('[data-card-delete]').forEach(el => {
     el.addEventListener('click', () => deleteAccessCard(el.dataset.cardDelete));
   });
@@ -877,15 +1172,27 @@ function bindEvents() {
   document.querySelectorAll('[data-password-delete]').forEach(el => {
     el.addEventListener('click', () => deletePassword(el.dataset.passwordDelete));
   });
+  document.querySelectorAll('[data-password-edit]').forEach(el => {
+    el.addEventListener('click', () => editPasswordFlow(el.dataset.passwordEdit));
+  });
+  document.querySelectorAll('[data-chart-open]').forEach(el => {
+    el.addEventListener('click', () => openChartZoom(el.dataset.chartOpen));
+  });
   const loginForm = document.getElementById('login-form');
   if (loginForm) loginForm.addEventListener('submit', handleLogin);
 }
 
 function setNestedForm(key, value, skipRender = false) {
-  const numeric = ['doorAutoClose', 'lightBrightness', 'lightHold', 'fanDir', 'fanSpeed', 'temperatureOnThreshold', 'temperatureOffThreshold', 'humidityOnThreshold', 'humidityOffThreshold'];
+  const numeric = ['autoCloseSeconds', 'lightBrightness', 'lightHold', 'fanDir', 'fanSpeed', 'temperatureOnThreshold', 'temperatureOffThreshold', 'humidityOnThreshold', 'humidityOffThreshold'];
   state.forms = { ...state.forms, [key]: numeric.includes(key) ? Number(value) : value };
   state.lastFormEditAt = Date.now();
   if (!skipRender) render();
+}
+
+function autoApplyDeviceConfig(action) {
+  if (state.esp32.status !== 'online') return;
+  clearTimeout(state.autoApplyTimer);
+  state.autoApplyTimer = setTimeout(() => executeCommand(action), 500);
 }
 
 async function handleLogin(e) {
@@ -931,11 +1238,14 @@ async function refreshSensor() {
     state.sensor = adapted;
     pushSensorHistory(adapted);
     syncFormsFromSensor(adapted);
-    state.esp32 = { status: 'online', lastSeen: data.time || new Date().toLocaleTimeString('vi-VN') };
-    render();
+    state.esp32 = {
+      status: data.connected === false ? 'offline' : 'online',
+      lastSeen: data.time || new Date().toLocaleTimeString('vi-VN'),
+    };
+    safeRender();
   } catch {
     state.esp32 = { ...state.esp32, status: 'offline' };
-    render();
+    safeRender();
   }
 }
 
@@ -943,22 +1253,44 @@ async function refreshStats() {
   try {
     const stats = await request('/stats');
     state.stats = { ...state.stats, ...stats };
-    if (stats.esp32Connected) state.esp32 = { ...state.esp32, status: 'online', lastSeen: stats.lastStatusAt || state.esp32.lastSeen };
-    render();
+    state.esp32 = {
+      ...state.esp32,
+      status: stats.esp32Connected ? 'online' : (stats.esp32SocketOpen ? 'reconnecting' : 'offline'),
+      lastSeen: stats.lastStatusAt || state.esp32.lastSeen,
+    };
+    safeRender();
   } catch {}
 }
 
 async function refreshEvents() {
   try {
-    const events = await request('/events?limit=120');
-    state.events = events.map(adaptEventFromFirestore);
+    const events = await request(`/events?limit=120${state.forms.logsDate ? `&date=${encodeURIComponent(state.forms.logsDate)}` : ''}`);
+    const fetched = events.map(adaptEventFromFirestore);
+    // Không replace cứng state.events, vì event thật vừa nhận qua SSE có thể chưa kịp
+    // được ghi xong xuống file local. Gộp event đang hiển thị với event đã lưu để log
+    // không bị hiện rồi biến mất ở lần refresh kế tiếp.
+    state.events = mergeEvents(fetched, state.events, 120);
   } catch {}
 }
 
 async function refreshDailyStats() {
   try {
-    const rows = await request('/daily-stats?days=7');
+    const rows = await request('/daily-stats?days=30');
     state.dailyStats = rows.map(adaptDailyStat);
+    await ensureSelectedDailyStat();
+  } catch {}
+}
+
+async function ensureSelectedDailyStat() {
+  const selected = state.forms.selectedAnalyticsDate;
+  if (!selected || state.dailyStats.some(row => row.date === selected)) return;
+  try {
+    const rows = await request(`/daily-stats?date=${encodeURIComponent(selected)}`);
+    const selectedRows = rows.map(adaptDailyStat);
+    if (selectedRows.length) {
+      state.dailyStats = [...state.dailyStats.filter(row => row.date !== selected), ...selectedRows]
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    }
   } catch {}
 }
 
@@ -973,6 +1305,13 @@ async function refreshAccess() {
   } catch {}
 }
 
+function scheduleRealtimeStatsRefresh() {
+  clearTimeout(realtimeStatsRefreshTimer);
+  realtimeStatsRefreshTimer = setTimeout(() => {
+    Promise.allSettled([refreshStats(), refreshDailyStats()]).then(() => safeRender());
+  }, 300);
+}
+
 function connectMonitor() {
   if (state.eventSource) state.eventSource.close();
   const source = new EventSource(`${API}/log-stream?token=${encodeURIComponent(state.token)}`);
@@ -985,17 +1324,37 @@ function connectMonitor() {
         pushSensorHistory(state.sensor);
         syncFormsFromSensor(state.sensor);
         state.esp32 = { status: 'online', lastSeen: msg.time };
-        render();
+        scheduleRealtimeStatsRefresh();
+        safeRender();
+        return;
+      }
+      if (msg.level === 'EVENT') {
+        const event = JSON.parse(msg.message);
+        if (event.type === 'esp32_disconnected') {
+          state.esp32 = { ...state.esp32, status: 'offline', lastSeen: state.esp32.lastSeen };
+        }
+        if (event.type === 'esp32_connected') {
+          state.esp32 = { ...state.esp32, status: 'reconnecting' };
+        }
+        if (event.type === 'access_lockout') {
+          setSecurityLockout(event.metadata?.seconds || 30);
+        }
+        if (event.type === 'access_success' || event.type === 'lockout_reset') {
+          clearSecurityLockout();
+        }
+        addEvent(adaptEventFromFirestore(event));
+        scheduleRealtimeStatsRefresh();
+        safeRender();
         return;
       }
       addEventFromServer(msg);
-      render();
+      safeRender();
     } catch {}
   };
   source.onerror = () => {
     state.esp32 = { ...state.esp32, status: 'reconnecting' };
     addEvent({ type: 'esp32_disconnected', source: 'system', target: 'esp32', message: 'Mất kết nối monitor, đang thử lại...', time: nowTime() });
-    render();
+    safeRender();
   };
 }
 
@@ -1016,8 +1375,17 @@ function handleCommandAction(action) {
 }
 
 async function executeCommand(action) {
+  if (action === 'fan-settings' && !fanThresholdsValid()) {
+    showToast('Ngưỡng quạt chưa hợp lệ: nhiệt bật phải lớn hơn nhiệt tắt, ẩm hồi tắt phải lớn hơn ẩm thấp bật.', 'warning');
+    return;
+  }
   if (state.esp32.status !== 'online') {
     showToast('ESP32 offline, không thể gửi lệnh trực tiếp.', 'error');
+    return;
+  }
+  const lockoutBlockedActions = ['door-open', 'door-close', 'garage-open', 'garage-close', 'garage-auto', 'garage-manual'];
+  if (isSystemLockout() && lockoutBlockedActions.includes(action)) {
+    showToast('Hệ thống đang lockout, chỉ có thể dùng nút Giải khóa truy cập.', 'warning');
     return;
   }
   if (Date.now() < state.commandLockedUntil) {
@@ -1041,6 +1409,7 @@ async function executeCommand(action) {
 
   try {
     const result = await request(command.path, { method: 'POST', body: JSON.stringify(command.body || {}) });
+    if (action === 'unlock-lockout') clearSecurityLockout();
     showToast(`Command thành công: ${command.label}`, 'success');
     addEvent({ type: 'remote_command', source: 'web_app', target: command.target, message: `${command.label} (${typeof result === 'string' ? result : 'OK'})`, time: nowTime() });
     setTimeout(refreshAll, 350);
@@ -1054,6 +1423,11 @@ async function executeCommand(action) {
   }
 }
 
+function fanThresholdsValid() {
+  return Number(state.forms.temperatureOnThreshold) > Number(state.forms.temperatureOffThreshold)
+    && Number(state.forms.humidityOffThreshold) > Number(state.forms.humidityOnThreshold);
+}
+
 async function createCardFlow() {
   setState({ dialog: { kind: 'card-form' } });
 }
@@ -1065,18 +1439,25 @@ async function submitCardForm(e) {
   const name = String(form.get('name') || '').trim() || 'Thẻ mới';
   const target = form.get('target') === 'garageDoor' ? 'garageDoor' : 'mainDoor';
   const enabled = form.get('enabled') !== 'false';
+  let policy;
+  try {
+    policy = accessPolicyFromForm(form);
+  } catch (err) {
+    showToast(err.message, 'warning');
+    return;
+  }
   try {
     if (dialog.enroll) {
-      await request('/access/cards/enroll', { method: 'POST', body: JSON.stringify({ name, target }) });
+      await request('/access/cards/enroll', { method: 'POST', body: JSON.stringify({ name, target, ...policy }) });
       showToast('Add Card Mode bật trong 60 giây. Quẹt thẻ trước đầu đọc RFID.', 'success');
     } else if (dialog.card?.id) {
-      await request(`/access/cards/${encodeURIComponent(dialog.card.id)}`, { method: 'PATCH', body: JSON.stringify({ name, target, enabled }) });
+      await request(`/access/cards/${encodeURIComponent(dialog.card.id)}`, { method: 'PATCH', body: JSON.stringify({ name, target, enabled, ...policy }) });
       showToast('Đã cập nhật thẻ.', 'success');
     } else {
       const uid = String(form.get('uid') || '').trim();
       await request('/access/cards', {
         method: 'POST',
-        body: JSON.stringify({ uid, name, target, accessType: 'full_time', enabled }),
+        body: JSON.stringify({ uid, name, target, enabled, ...policy }),
       });
       showToast('Đã thêm thẻ RFID.', 'success');
     }
@@ -1116,28 +1497,89 @@ async function createPasswordFlow() {
   setState({ dialog: { kind: 'password-form' } });
 }
 
+async function editPasswordFlow(id) {
+  const password = state.passwords.find(item => item.id === id);
+  setState({ dialog: { kind: 'password-form', password } });
+}
+
+function openChartZoom(id) {
+  const chart = chartRegistry.get(id);
+  if (chart) setState({ dialog: { kind: 'chart-zoom', chart } });
+}
+
 async function submitPasswordForm(e) {
   e.preventDefault();
   const form = new FormData(e.currentTarget);
+  const dialog = state.dialog || {};
+  const isEdit = !!dialog.password?.id;
   const password = String(form.get('password') || '');
   const name = String(form.get('name') || '').trim() || 'Mật khẩu tạm';
-  const relativeMinutesRaw = String(form.get('relativeMinutes') || '').trim();
-  const useMinutes = form.get('durationMode') === 'minutes' && relativeMinutesRaw;
+  if (!isEdit && password.length < 4) {
+    showToast('Mật khẩu truy cập cần tối thiểu 4 ký tự.', 'warning');
+    return;
+  }
+  if (password && (password.length < 4 || password.length > 16)) {
+    showToast('Mật khẩu truy cập phải từ 4 đến 16 ký tự.', 'warning');
+    return;
+  }
+  let policy;
+  try {
+    policy = accessPolicyFromForm(form);
+  } catch (err) {
+    showToast(err.message, 'warning');
+    return;
+  }
   const body = {
-    password,
+    ...(password ? { password } : {}),
     name,
-    type: useMinutes ? 'guest' : 'temporary',
-    accessType: 'full_time',
-    relativeMinutes: useMinutes ? Number(relativeMinutesRaw) : undefined,
+    type: form.get('type') || dialog.password?.type || 'temporary',
+    ...policy,
   };
   try {
-    await request('/access/passwords', { method: 'POST', body: JSON.stringify(body) });
-    showToast('Đã tạo mật khẩu truy cập.', 'success');
+    if (isEdit) {
+      await request(`/access/passwords/${encodeURIComponent(dialog.password.id)}`, { method: 'PATCH', body: JSON.stringify(body) });
+      showToast('Đã cập nhật mật khẩu truy cập.', 'success');
+    } else {
+      await request('/access/passwords', { method: 'POST', body: JSON.stringify(body) });
+      showToast('Đã tạo mật khẩu truy cập.', 'success');
+    }
     state.dialog = null;
     await refreshAccess();
     render();
   } catch (e) {
-    showToast(`Không tạo được mật khẩu: ${e.message}`, 'error');
+    if (e.message === 'PASSWORD_DUPLICATED') {
+      showToast('Mật khẩu này đã tồn tại, hãy chọn mật khẩu khác.', 'warning');
+    } else if (e.message === 'PASSWORD_LENGTH_INVALID') {
+      showToast('Mật khẩu truy cập phải từ 4 đến 16 ký tự.', 'warning');
+    } else {
+      showToast(`Không lưu được mật khẩu: ${e.message}`, 'error');
+    }
+  }
+}
+
+async function submitChangePasswordForm(e) {
+  e.preventDefault();
+  const form = new FormData(e.currentTarget);
+  const currentPassword = String(form.get('currentPassword') || '');
+  const newPassword = String(form.get('newPassword') || '');
+  const confirmPassword = String(form.get('confirmPassword') || '');
+  if (newPassword.length < 8) {
+    showToast('Mật khẩu mới cần tối thiểu 8 ký tự.', 'warning');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    showToast('Mật khẩu xác nhận chưa khớp.', 'warning');
+    return;
+  }
+  try {
+    await request('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    e.currentTarget.reset();
+    showToast('Đã đổi mật khẩu web app.', 'success');
+  } catch (err) {
+    showToast(`Không đổi được mật khẩu: ${err.message}`, 'error');
   }
 }
 
@@ -1164,11 +1606,13 @@ function applyOptimisticCommand(action) {
   if (action === 'light-manual' || action === 'light-on' || action === 'light-off') next.lightMode = 'MANUAL';
   if (action === 'light-on') next.lightOn = true;
   if (action === 'light-off') next.lightOn = false;
-  if (action === 'light-settings') {
+  if (['light-settings', 'light-on', 'light-off', 'light-auto', 'light-manual'].includes(action)) {
     state.desiredLight = {
       brightness: Number(state.forms.lightBrightness),
       effect: state.forms.lightEffect,
       hold: Number(state.forms.lightHold),
+      on: action === 'light-on' ? true : action === 'light-off' ? false : undefined,
+      mode: action === 'light-auto' ? 'AUTO' : action === 'light-manual' || action === 'light-on' || action === 'light-off' ? 'MANUAL' : undefined,
       until: Date.now() + 15000,
     };
     next.lightBrightness = Number(state.forms.lightBrightness);
@@ -1182,17 +1626,23 @@ function applyOptimisticCommand(action) {
       speed: Number(state.forms.fanSpeed),
       until: Date.now() + 15000,
     };
-    next.fanMode = state.forms.fanMode === 'auto' ? 'AUTO' : 'MANUAL';
-    next.fanPct = state.forms.fanMode === 'off' ? 0 : Number(state.forms.fanSpeed);
-    next.fan = state.forms.fanMode === 'off' || Number(state.forms.fanSpeed) === 0
-      ? 'OFF'
-      : Number(state.forms.fanDir) === -1 ? 'REVERSE' : 'FORWARD';
+    if (state.forms.fanMode === 'auto') {
+      next.fanMode = 'AUTO';
+    } else if (state.forms.fanMode === 'off') {
+      next.fanMode = 'MANUAL';
+      next.fanPct = 0;
+      next.fan = 'OFF';
+    } else {
+      next.fanMode = 'MANUAL';
+      next.fanPct = Number(state.forms.fanSpeed);
+      next.fan = Number(state.forms.fanSpeed) === 0 ? 'OFF' : Number(state.forms.fanDir) === -1 ? 'REVERSE' : 'FORWARD';
+    }
   }
   state.sensor = next;
 }
 
 function commandPayload(action) {
-  const seconds = String(state.forms.doorAutoClose || 30);
+  const seconds = String(state.forms.autoCloseSeconds || 30);
   const map = {
     'door-open': { path: '/command', body: { method: 'POST', path: '/unlock', payload: seconds }, label: 'Mở cửa chính', target: 'mainDoor' },
     'door-close': { path: '/command', body: { method: 'POST', path: '/close' }, label: 'Đóng cửa chính', target: 'mainDoor' },
@@ -1206,8 +1656,9 @@ function commandPayload(action) {
     'light-settings': { path: '/light/settings', body: { holdSeconds: state.forms.lightHold, brightness: state.forms.lightBrightness, effect: state.forms.lightEffect }, label: 'Lưu cấu hình đèn', target: 'hallwayLight' },
     'garage-auto': { path: '/command', body: { method: 'POST', path: '/gara_auto' }, label: 'Gara chế độ tự động', target: 'garageDoor' },
     'garage-manual': { path: '/command', body: { method: 'POST', path: '/gara_manual' }, label: 'Gara chế độ thủ công', target: 'garageDoor' },
-    'fan-apply': { path: '/fan', body: { mode: state.forms.fanMode, dir: Number(state.forms.fanDir), speed: Number(state.forms.fanSpeed) }, label: 'Áp dụng quạt', target: 'environmentFan' },
-    'fan-settings': { path: '/fan/settings', body: { temperatureOnThreshold: state.forms.temperatureOnThreshold, temperatureOffThreshold: state.forms.temperatureOffThreshold, humidityOnThreshold: state.forms.humidityOnThreshold, humidityOffThreshold: state.forms.humidityOffThreshold }, label: 'Lưu ngưỡng quạt', target: 'environmentFan' },
+    'fan-apply': { path: '/fan', body: { mode: state.forms.fanMode, dir: Number(state.forms.fanDir), speed: Number(state.forms.fanSpeed) }, label: 'Cập nhật quạt', target: 'environmentFan' },
+    'fan-settings': { path: '/fan/settings', body: { temperatureOnThreshold: state.forms.temperatureOnThreshold, temperatureOffThreshold: state.forms.temperatureOffThreshold, humidityOnThreshold: state.forms.humidityOnThreshold, humidityOffThreshold: state.forms.humidityOffThreshold, speed: Number(state.forms.fanSpeed) }, label: 'Cập nhật ngưỡng/tốc độ tự động quạt', target: 'environmentFan' },
+    'auto-close-settings': { path: '/settings/auto-close', body: { seconds: state.forms.autoCloseSeconds }, label: 'Lưu thời gian tự đóng', target: 'system' },
     'sync': { path: '/command', body: { method: 'POST', path: '/status' }, label: 'Sync config', target: 'esp32' },
     'add-card-mode': { path: '/command', body: { method: 'POST', path: '/rfid_add_mode' }, label: 'Bật Add Card Mode', target: 'rfid' },
   };
@@ -1215,33 +1666,46 @@ function commandPayload(action) {
 }
 
 function renderCommandButtonsOnly() {
-  if (!state.token || !state.commandLockedUntil) return;
-  if (Date.now() < state.commandLockedUntil) return;
-  state.commandLockedUntil = 0;
-  if (state.commandUnlockRenderAt) {
-    state.commandUnlockRenderAt = 0;
-    render();
+  if (!state.token) return;
+  let needsRender = false;
+  if (state.commandLockedUntil && Date.now() >= state.commandLockedUntil) {
+    state.commandLockedUntil = 0;
+    if (state.commandUnlockRenderAt) {
+      state.commandUnlockRenderAt = 0;
+      needsRender = true;
+    }
   }
+  if (state.securityLockoutUntil && Date.now() >= state.securityLockoutUntil) {
+    clearSecurityLockout();
+    needsRender = true;
+  }
+  if (needsRender) render();
 }
 
 function adaptSensor(data, time) {
-  const lightOn = data.light === true || data.light === 'true' || data.light === 'ON';
+  const lightOn = data.light === true || ['true', 'on', '1', 'yes'].includes(String(data.light).toLowerCase());
   return {
     door: String(data.door || 'UNKNOWN').toUpperCase(),
     gara: String(data.gara || data.garage || 'UNKNOWN').toUpperCase(),
     garageMode: String(data.garageMode || 'AUTO').toUpperCase(),
+    sysState: String(data.sysState || data.systemState || '').toUpperCase(),
+    lockout: data.lockout === true || String(data.lockout || '').toLowerCase() === 'true' || String(data.door || '').toUpperCase() === 'LOCKED_OUT',
     temp: data.temp ?? data.temperature ?? null,
     humidity: data.humidity ?? null,
     motion: data.motion === true || data.motion === 'true' || data.motion === 'ON',
     dist: data.dist ?? data.distanceCm ?? null,
     fan: String(data.fan || 'OFF').toUpperCase(),
     fanPct: data.fanPct ?? data.fanSpeed ?? 0,
+    fanAutoPct: data.fanAutoPct ?? null,
     fanMode: String(data.fanMode || 'MANUAL').toUpperCase(),
     lightOn,
     lightMode: String(data.lightMode || 'MANUAL').toUpperCase(),
     lightBrightness: Number(data.lightBrightness ?? data.brightness ?? (state?.forms?.lightBrightness ?? 70)),
     lightEffect: data.lightEffect || data.effect || (state?.forms?.lightEffect ?? 'Static'),
     lightHold: Number(data.lightHold ?? data.holdSeconds ?? (state?.forms?.lightHold ?? 15)),
+    autoCloseSeconds: Number(data.autoCloseSeconds ?? (state?.forms?.autoCloseSeconds ?? 30)),
+    doorRemainingSeconds: Number(data.doorRemainingSeconds ?? 0),
+    garaRemainingSeconds: Number(data.garaRemainingSeconds ?? 0),
     time: data.time || time || nowTime(),
     labelTime: timeLabel(data.time || time),
     receivedAt: Date.now(),
@@ -1258,10 +1722,12 @@ function stabilizeFanSensor(sensor) {
   return {
     ...sensor,
     fanMode: desired.mode === 'auto' ? 'AUTO' : 'MANUAL',
-    fanPct: desired.mode === 'off' ? 0 : desired.speed,
-    fan: desired.mode === 'off' || desired.speed === 0
-      ? 'OFF'
-      : desired.dir === -1 ? 'REVERSE' : 'FORWARD',
+    ...(desired.mode === 'auto' ? {} : {
+      fanPct: desired.mode === 'off' ? 0 : desired.speed,
+      fan: desired.mode === 'off' || desired.speed === 0
+        ? 'OFF'
+        : desired.dir === -1 ? 'REVERSE' : 'FORWARD',
+    }),
   };
 }
 
@@ -1277,6 +1743,7 @@ function stabilizeLightSensor(sensor) {
     lightBrightness: desired.brightness,
     lightEffect: desired.effect,
     lightHold: desired.hold,
+    ...(desired.on !== undefined ? { lightOn: desired.on, lightMode: desired.mode || sensor.lightMode } : {}),
   };
 }
 
@@ -1287,12 +1754,17 @@ function addEventFromServer(msg) {
     LOCKOUT: 'access_lockout',
     INFO: 'device_state_changed',
   };
+  if (msg.level === 'LOCKOUT') {
+    const sec = Number(String(msg.message || '').match(/(\d+)/)?.[1] || 30);
+    setSecurityLockout(sec);
+  }
   addEvent({
     type: mapped[msg.level] || 'device_state_changed',
     source: 'system',
     target: inferTarget(msg.message),
     message: msg.message,
     time: msg.time || nowTime(),
+    createdAtIso: msg.timestamp || new Date().toISOString(),
   });
 }
 
@@ -1304,8 +1776,27 @@ function adaptEventFromFirestore(doc) {
     source: doc.source || 'system',
     target: doc.target || doc.deviceId || 'system',
     message: doc.message || `${doc.type || 'event'}`,
+    createdAtIso: doc.createdAtIso || null,
     time: timeLabel(created),
+    date: doc.date || dateIdFromValue(created),
+    metadata: doc.metadata || {},
   };
+}
+
+
+function accessItemStatus(item = {}) {
+  if (item.enabled === false) return 'disabled';
+  if (item.expiresAtIso && new Date(item.expiresAtIso).getTime() <= Date.now()) return 'expired';
+  if (item.accessType === 'time_window' || item.accessType === 'date_range') return 'limited';
+  return 'active';
+}
+
+function accessStatusLabel(status) {
+  return ({ active: 'active', limited: 'limited', expired: 'expired', disabled: 'disabled' })[status] || status || 'active';
+}
+
+function accessStatusTone(status) {
+  return status === 'active' ? 'success' : status === 'expired' || status === 'disabled' ? 'danger' : 'warning';
 }
 
 function adaptAccessCard(card) {
@@ -1318,7 +1809,9 @@ function adaptAccessCard(card) {
     timeWindow: card.timeWindow || null,
     dateRange: card.dateRange || null,
     expiresAtIso: card.expiresAtIso || null,
+    autoCloseSeconds: Number(card.autoCloseSeconds || 30),
     enabled: card.enabled !== false,
+    status: card.status || accessItemStatus(card),
     updatedAt: timeLabel(card.updatedAtIso || card.createdAtIso),
   };
 }
@@ -1333,15 +1826,19 @@ function adaptPassword(password) {
     timeWindow: password.timeWindow || null,
     dateRange: password.dateRange || null,
     expiresAtIso: password.expiresAtIso || null,
+    autoCloseSeconds: Number(password.autoCloseSeconds || 30),
     status: password.status || 'active',
   };
 }
 
 function adaptDailyStat(row) {
+  const date = row.date || row.id;
   return {
-    id: row.id || row.date,
-    date: row.date || row.id,
-    label: shortDateLabel(row.date || row.id),
+    id: row.id || date,
+    date,
+    label: shortDateLabel(date),
+    hasData: row.hasData !== false,
+    noData: row.noData === true,
     avgTemperature: Number(row.avgTemperature ?? row.avgTemp ?? row.lastTemperature ?? 0),
     avgHumidity: Number(row.avgHumidity ?? row.lastHumidity ?? 0),
     fanOnMinutes: Number(row.fanOnMinutes ?? row.fanMinutes ?? 0),
@@ -1350,7 +1847,39 @@ function adaptDailyStat(row) {
     garageEvents: Number(row.garageEvents ?? 0),
     lockouts: Number(row.lockouts ?? 0),
     failedAccess: Number(row.failedAccess ?? 0),
-    hourly: row.hourly || null,
+    anomalies: Number(row.anomalies ?? 0),
+    anomalyTags: Array.isArray(row.anomalyTags) ? row.anomalyTags : [],
+    hourly: normalizeHourlyBuckets(row.hourly || {}),
+  };
+}
+
+function normalizeHourlyBuckets(hourly) {
+  const out = {};
+  for (let hour = 0; hour < 24; hour++) {
+    const key = String(hour).padStart(2, '0');
+    out[key] = normalizeHourlyBucket(hourly[key], hour);
+  }
+  return out;
+}
+
+function normalizeHourlyBucket(bucket = {}, hour = 0) {
+  const hasData = bucket.hasData !== false
+    && bucket.noData !== true
+    && Number(bucket.sampleCount || bucket.tempCount || bucket.humidityCount || 0) > 0;
+  return {
+    period: bucket.period || dayPeriod(hour),
+    hasData,
+    noData: !hasData,
+    avgTemperature: hasData ? Number(bucket.avgTemperature ?? defaultChartValue('avgTemperature')) : defaultChartValue('avgTemperature'),
+    avgHumidity: hasData ? Number(bucket.avgHumidity ?? defaultChartValue('avgHumidity')) : defaultChartValue('avgHumidity'),
+    fanOnMinutes: hasData ? Number(bucket.fanOnMinutes ?? 0) : defaultChartValue('fanOnMinutes'),
+    lightOnMinutes: hasData ? Number(bucket.lightOnMinutes ?? 0) : defaultChartValue('lightOnMinutes'),
+    failedAccess: hasData ? Number(bucket.failedAccess ?? 0) : defaultChartValue('failedAccess'),
+    lockouts: hasData ? Number(bucket.lockouts ?? 0) : defaultChartValue('lockouts'),
+    unlocks: hasData ? Number(bucket.unlocks ?? 0) : defaultChartValue('unlocks'),
+    garageEvents: hasData ? Number(bucket.garageEvents ?? 0) : defaultChartValue('garageEvents'),
+    anomalies: hasData ? Number(bucket.anomalies ?? 0) : defaultChartValue('anomalies'),
+    anomalyTags: hasData && Array.isArray(bucket.anomalyTags) ? bucket.anomalyTags : [],
   };
 }
 
@@ -1361,8 +1890,41 @@ function shortDateLabel(value) {
   return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
 }
 
+function eventStableKey(event = {}) {
+  return event.id || `${event.type || ''}:${event.target || ''}:${event.source || ''}:${event.createdAtIso || event.time || ''}:${event.message || ''}`;
+}
+
+function eventSortValue(event = {}) {
+  if (event.createdAtIso) {
+    const ms = Date.parse(event.createdAtIso);
+    if (Number.isFinite(ms)) return ms;
+  }
+  const raw = String(event.time || '');
+  const match = raw.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    const h = Number(match[1]);
+    const m = Number(match[2]);
+    const sec = Number(match[3] || 0);
+    return h * 3600 + m * 60 + sec;
+  }
+  return 0;
+}
+
+function mergeEvents(primary = [], secondary = [], limit = 120) {
+  const byKey = new Map();
+  for (const event of [...primary, ...secondary]) {
+    if (!event) continue;
+    const key = eventStableKey(event);
+    if (!byKey.has(key)) byKey.set(key, event);
+  }
+  return [...byKey.values()]
+    .sort((a, b) => eventSortValue(b) - eventSortValue(a))
+    .slice(0, limit);
+}
+
 function addEvent(event) {
-  state.events = [{ id: cryptoId(), ...event }, ...state.events].slice(0, 120);
+  const id = event.id || cryptoId();
+  state.events = mergeEvents([{ ...event, id }], state.events, 120);
 }
 
 function showToast(message, type = 'info') {
@@ -1390,7 +1952,7 @@ function pushSensorHistory(sensor) {
 
 function syncFormsFromSensor(sensor) {
   const active = document.activeElement;
-  if (active && active.dataset && active.dataset.form) return;
+    if (active && active.dataset && active.dataset.form) return;
   if (state.pendingCommand) return;
   if (Date.now() - state.lastFormEditAt < 8000) return;
     state.forms = {
@@ -1398,9 +1960,10 @@ function syncFormsFromSensor(sensor) {
       lightBrightness: Number(sensor.lightBrightness ?? state.forms.lightBrightness),
       lightEffect: sensor.lightEffect || state.forms.lightEffect,
       lightHold: Number(sensor.lightHold ?? state.forms.lightHold),
-      fanMode: sensor.fanMode === 'AUTO' ? 'auto' : sensor.fan === 'OFF' ? 'off' : 'manual',
-      fanSpeed: Number(sensor.fanPct ?? state.forms.fanSpeed),
-      fanDir: sensor.fan === 'REVERSE' ? -1 : sensor.fan === 'OFF' ? 0 : 1,
+      autoCloseSeconds: Number(sensor.autoCloseSeconds ?? state.forms.autoCloseSeconds),
+      fanMode: sensor.fanMode === 'AUTO' ? 'auto' : sensor.fan === 'OFF' ? 'off' : 'on',
+      fanSpeed: Number((sensor.fanMode === 'AUTO' ? (sensor.fanAutoPct ?? sensor.fanPct) : sensor.fanPct) ?? state.forms.fanSpeed),
+      fanDir: sensor.fan === 'REVERSE' ? -1 : state.forms.fanDir || 1,
   };
 }
 
@@ -1448,7 +2011,7 @@ function displayState(kind, value) {
 
 function displayMode(value) {
   const v = String(value || 'UNKNOWN').toUpperCase();
-  return ({ AUTO: 'Tự động', MANUAL: 'Thủ công', OFF: 'Tắt', UNKNOWN: 'Chưa rõ' })[v] || v;
+  return ({ AUTO: 'Tự động', MANUAL: 'Bật', ON: 'Bật', OFF: 'Tắt', UNKNOWN: 'Chưa rõ' })[v] || v;
 }
 
 function effectLabel(value) {
@@ -1473,7 +2036,7 @@ function toneForGarage(value) {
 
 function sensorTone(type) {
   if (type === 'temp' && Number(state.sensor.temp) >= state.forms.temperatureOnThreshold) return 'warning';
-  if (type === 'humidity' && Number(state.sensor.humidity) >= state.forms.humidityOnThreshold) return 'warning';
+  if (type === 'humidity' && Number(state.sensor.humidity) <= state.forms.humidityOnThreshold) return 'warning';
   return 'info';
 }
 
@@ -1486,6 +2049,27 @@ function doorDescription() {
   if (state.sensor.door === 'LOCKED_OUT') return 'Truy cập đang bị khóa tạm thời';
   if (state.sensor.door === 'OPEN') return 'Cửa đang mở, kiểm tra khu vực ra vào';
   return 'Cửa chính an toàn';
+}
+
+function doorCountdownText() {
+  if (state.sensor.door !== 'OPEN') return '';
+  return `Tự đóng sau ${formatSeconds(state.sensor.doorRemainingSeconds)}`;
+}
+
+function garageCountdownText() {
+  if (state.sensor.gara !== 'OPEN') return '';
+  const resetHint = state.sensor.garageMode === 'AUTO' ? ' · reset khi siêu âm phát hiện vật' : '';
+  return `Tự đóng sau ${formatSeconds(state.sensor.garaRemainingSeconds)}${resetHint}`;
+}
+
+function formatSeconds(value) {
+  const sec = Math.max(0, Math.round(Number(value) || 0));
+  if (sec >= 60) {
+    const minutes = Math.floor(sec / 60);
+    const rest = sec % 60;
+    return `${minutes}m${String(rest).padStart(2, '0')}s`;
+  }
+  return `${sec}s`;
 }
 
 function garageDistanceText() {
@@ -1550,7 +2134,156 @@ function accessTypeLabel(type) {
 }
 
 function filterLabel(value) {
-  return ({ today: 'Today', '7d': 'Last 7 days', '30d': 'Last 30 days', custom: 'Custom range' })[value];
+  return ({ '1d': '1 day', today: '1 day', '7d': 'Last 7 days', '30d': 'Last 30 days' })[value];
+}
+
+function analyticsView() {
+  const mode = state.forms.timeFilter === 'today' ? '1d' : state.forms.timeFilter;
+  const day = selectedDayStat();
+  const rows = analyticsRows();
+  const totals = rows.reduce((out, row) => {
+    ['unlocks', 'garageEvents', 'failedAccess', 'lockouts', 'anomalies'].forEach(key => {
+      out[key] = (out[key] || 0) + Number(row[key] || 0);
+    });
+    return out;
+  }, {});
+  if (mode === '1d') {
+    return {
+      mode,
+      rows,
+      day,
+      totals: day ? {
+        unlocks: day.unlocks,
+        garageEvents: day.garageEvents,
+        failedAccess: day.failedAccess,
+        lockouts: day.lockouts,
+        anomalies: day.anomalies,
+      } : totals,
+      title: `Chi tiết ngày ${shortDateLabel(state.forms.selectedAnalyticsDate)}`,
+      detail: 'lần trong ngày',
+      suffix: 'theo giờ',
+    };
+  }
+  return {
+    mode,
+    rows,
+    day,
+    totals,
+    title: mode === '30d' ? 'Tổng quan 30 ngày gần nhất' : 'Tổng quan 7 ngày gần nhất',
+    detail: mode === '30d' ? 'tổng 30 ngày' : 'tổng 7 ngày',
+    suffix: 'theo ngày',
+  };
+}
+
+function analyticsRows() {
+  const mode = state.forms.timeFilter === 'today' ? '1d' : state.forms.timeFilter;
+  if (mode === '30d') return filledDailyRows(30);
+  if (mode === '7d') return filledDailyRows(7);
+  const selected = selectedDayStat();
+  return selected ? [selected] : [];
+}
+
+function selectedDayStat() {
+  const selected = state.forms.selectedAnalyticsDate || todayDateId();
+  return state.dailyStats.find(row => row.date === selected)
+    || makeDefaultDailyStat(selected);
+}
+
+function analyticsSeries(key, chartType) {
+  const view = analyticsView();
+  if (view.mode === '1d') return hourlySeriesForDay(view.day, key);
+  return dailySeriesForRows(view.rows, key, chartType);
+}
+
+function shouldHighlightAnomaly(key, item = {}, scope = 'hourly') {
+  if (!item) return false;
+
+  // Biểu đồ 1 day dùng ngưỡng theo giờ; biểu đồ 7/30 days dùng ngưỡng theo ngày.
+  // Như vậy FAILED_ACCESS_ALERT_DAILY / LOCKOUT_ALERT_DAILY mới quyết định màu đỏ
+  // trên biểu đồ theo ngày, thay vì bị ảnh hưởng bởi từng bucket giờ.
+  const hourlyTags = Array.isArray(item.anomalyTags) ? item.anomalyTags : [];
+  const dailyTags = Array.isArray(item.dailyAnomalyTags) ? item.dailyAnomalyTags : hourlyTags;
+  const tags = scope === 'daily' ? dailyTags : hourlyTags;
+
+  if (key === 'avgTemperature') return hourlyTags.includes('temperature_high') || hourlyTags.includes('temp_high') || hourlyTags.includes('temp_spike');
+  if (key === 'avgHumidity') return hourlyTags.includes('humidity_high') || hourlyTags.includes('humidity_low');
+
+  if (scope === 'daily') {
+    if (key === 'failedAccess') return tags.includes('failed_access_high_daily');
+    if (key === 'lockouts') return tags.includes('lockout_high_daily');
+    if (key === 'fanOnMinutes') return tags.includes('fan_on_too_long_daily');
+    if (key === 'lightOnMinutes') return tags.includes('light_on_too_long_daily');
+    return tags.length > 0;
+  }
+
+  if (key === 'failedAccess') return tags.includes('failed_access_high');
+  if (key === 'lockouts') return tags.includes('lockout');
+  if (key === 'fanOnMinutes') return tags.includes('fan_on_too_long');
+  if (key === 'lightOnMinutes') return tags.includes('light_on_too_long');
+  return Number(item.anomalies || 0) > 0;
+}
+
+function hourlySeriesForDay(day, key) {
+  const safeDay = day || makeDefaultDailyStat(state.forms.selectedAnalyticsDate || todayDateId());
+  return Object.entries(safeDay.hourly || normalizeHourlyBuckets({}))
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([hour, bucket]) => ({
+      value: Number(bucket[key] ?? defaultChartValue(key)),
+      label: `${hour}:00`,
+      noData: bucket.noData === true,
+      anomaly: shouldHighlightAnomaly(key, bucket, 'hourly'),
+      period: bucket.period || dayPeriod(Number(hour)),
+    }));
+}
+
+function dailySeriesForRows(rows, key, chartType) {
+  const safeRows = rows.length ? rows : filledDailyRows(state.forms.timeFilter === '30d' ? 30 : 7);
+  return safeRows.map(row => ({
+    value: Number(row[key] ?? defaultChartValue(key)),
+    label: row.label || shortDateLabel(row.date),
+    noData: row.noData === true || row.hasData === false,
+    anomaly: shouldHighlightAnomaly(key, row, 'daily'),
+    period: 'day',
+  }));
+}
+
+function filledDailyRows(days) {
+  const byDate = new Map(state.dailyStats.map(row => [row.date, row]));
+  return dateIdsForLast(days).map(date => byDate.get(date) || makeDefaultDailyStat(date));
+}
+
+function dateIdsForLast(days) {
+  const end = new Date(`${todayDateId()}T00:00:00`);
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date(end);
+    date.setDate(end.getDate() - days + 1 + index);
+    return date.toISOString().slice(0, 10);
+  });
+}
+
+function makeDefaultDailyStat(date) {
+  return {
+    id: `default_${date}`,
+    date,
+    label: shortDateLabel(date),
+    hasData: false,
+    noData: true,
+    avgTemperature: defaultChartValue('avgTemperature'),
+    avgHumidity: defaultChartValue('avgHumidity'),
+    fanOnMinutes: defaultChartValue('fanOnMinutes'),
+    lightOnMinutes: defaultChartValue('lightOnMinutes'),
+    unlocks: defaultChartValue('unlocks'),
+    garageEvents: defaultChartValue('garageEvents'),
+    lockouts: defaultChartValue('lockouts'),
+    failedAccess: defaultChartValue('failedAccess'),
+    anomalies: defaultChartValue('anomalies'),
+    anomalyTags: [],
+    hourly: normalizeHourlyBuckets({}),
+  };
+}
+
+function defaultChartValue(key) {
+  return DEFAULT_CHART_VALUES[key] ?? 0;
 }
 
 function makeSeries(base, variance) {
@@ -1573,6 +2306,8 @@ function dailyStatSeries(primaryKey, legacyKey, fallbackSensorKey) {
     return state.dailyStats.map(row => ({
       value: Number(row[primaryKey] ?? row[legacyKey] ?? 0),
       label: row.label || shortDateLabel(row.date),
+      anomaly: shouldHighlightAnomaly(primaryKey, row, 'daily'),
+      period: 'day',
     }));
   }
   if (fallbackSensorKey) return chartSeries(fallbackSensorKey);
@@ -1585,9 +2320,17 @@ function hourlyStatSeries(key, fallbackSensorKey) {
     return Object.entries(latest.hourly).map(([hour, bucket]) => ({
       value: Number(bucket[key] ?? 0),
       label: `${hour}:00`,
+      anomaly: Number(bucket.anomalies || 0) > 0,
+      period: dayPeriod(Number(hour)),
     }));
   }
   return chartSeries(fallbackSensorKey);
+}
+
+function dayPeriod(hour) {
+  if (hour >= 5 && hour < 12) return 'morning';
+  if (hour >= 12 && hour < 18) return 'afternoon';
+  return 'night';
 }
 
 function timeBuckets(values) {
@@ -1615,6 +2358,12 @@ function nowTime() {
   return new Date().toLocaleTimeString('vi-VN');
 }
 
+function todayDateId() {
+  const date = new Date();
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
 function timeLabel(value) {
   if (!value || value === 'Mock fallback') return nowTime();
   if (value && typeof value === 'object' && Number.isFinite(value._seconds)) {
@@ -1624,6 +2373,28 @@ function timeLabel(value) {
   const parsed = Date.parse(value);
   if (!Number.isNaN(parsed)) return new Date(parsed).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   return String(value);
+}
+
+
+function dateIdFromValue(value) {
+  if (!value) return todayDateId();
+  if (value && typeof value === 'object' && Number.isFinite(value._seconds)) {
+    return new Date(value._seconds * 1000).toISOString().slice(0, 10);
+  }
+  const parsed = typeof value === 'number' ? value : Date.parse(value);
+  if (!Number.isFinite(parsed) && Number.isNaN(parsed)) return todayDateId();
+  const d = new Date(parsed);
+  const offset = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function dateTimeLabel(value) {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return String(value || '');
+  return new Date(parsed).toLocaleString('vi-VN', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
 }
 
 function cryptoId() {

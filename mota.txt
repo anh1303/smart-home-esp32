@@ -1,0 +1,29 @@
+Các chức năng mà tôi thấy tốt và phù hợp với hệ thống hiện tại hay nói cách khác danh sách chức năng cuối mà tôi thấy hợp lý là như sau:
+
+•	Nhóm Access Control (2 servo gara, cửa chính, keypad, rfid):
+o	RFID lưu nhiều thẻ khác nhau và được phép đặt tên thẻ lưu trong hệ thống để khoá / xoá / thay đổi quyền của thẻ. Do hạn chế phần cứng 1 thẻ chỉ có thể có 1 chức năng mở gara hoặc mở cửa. Nhưng quyền của mỗi thẻ có thể khác nhau, có thể gán quyền cho thẻ có thể truy cập full_time hoặc chỉ được phép mở cửa vào khung giờ cố định (ví dụ 8h- 10h) hoặc 1 khoảng thời gian cố định (từ ngày 1/1/2026 đến 3/1/2026) , đây có thể là loại thẻ cho nhân viên, người giúp việc hoặc nhờ người quen đến tưới cây.
+o	Cách ghi nhận thẻ RFID sẽ hoạt động như sau: Khi vào chế độ add card, đưa thẻ ra trước cảm biến, rfid sẽ đọc mã thẻ và sau đó esp32 sẽ đối chiếu thẻ đã tồn tại chưa. Sau khi ghi nhận thẻ sẽ được gán quyền full access mặc định và có thể được điều chỉnh sau.
+o	Keypad sẽ là thiết bị dùng để mở cửa chính, có logic mật khẩu giống thẻ từ nhưng chỉ có 1 mật khẩu chính duy nhất có quyền access fulltime, các mật khẩu còn lại có giới hạn khung giờ truy cập hoặc chỉ có hiệu lực trong 1 khoảng thời gian (ví dụ từ 1/1/2023 đến 1/2/2023), hoặc 30 phút kể từ thời điểm set (khi bạn muốn có mật khẩu dùng 1 lần để bạn đến nhà chơi có thể vào ngay), các mật khẩu hết hạn sẽ bị tự động xoá. Chỉ có duy nhất 1 mật khẩu chính (master).
+o	Mỗi khi nhập sai mật khẩu, sai thẻ, mở cửa thành công server đều tự động lưu trữ log lại cho mục đích truy suất và thống kê sau này.
+o	Vì đây là hệ thống mô hình nên việc đóng cửa chính hoặc gara sẽ được thực hiện tự động sau 30s (có thể điều chỉnh) hoặc ngay lập tức trên app web.
+o	Có thể đóng/mở cửa trực tiếp từ web app.
+o	Khi dùng thẻ sai quá nhiều lần, nhập mật khẩu sai quá nhiều lần (3 lần), hệ thống sẽ tự động khoá truy cập (hiển thị lên LCD), lần đầu sẽ khoá 30s, sau đó cứ mỗi 3 lần sai kế tiếp sẽ gấp đôi thời gian chờ. Khi hệ thống mở cửa bị khoá, chủ nhà vẫn có thể mở cửa trực tiếp từ web app, khi đó hệ thống sẽ giải trừ trạng thái khoá ngay lập tức (tránh trường hợp bị chơi xấu).
+•	Nhóm gara automation (servo, cảm biến siêu âm)
+o	Khi đi từ bên ngoài vào gara, người dùng sẽ sử dụng thẻ từ để truy cập như đã nêu ở trên.
+o	Khi từ bên trong ra ngoài, ở vị trí gần cửa gara được lắp đặt 1 cảm biến siêu âm có tác dụng tự động mở cửa khi có xe lại gần cổng hoặc đóng cổng khi không quá thời gian mở cửa và không còn vật ở trước cảm biến.
+o	Có thể đóng / mở cửa gara từ web app.
+•	Nhóm smart lighting (2 cảm biến IR, hệ thống đèn led):
+o	Đây là nhóm các thiết bị để tự động hoá việc bật tắt đèn hành lang khi cảm biến IR phát hiện có người ở hành lang và tắt đèn khi quá thời gian tối thiểu và không còn phát hiện người nữa, nếu khi đang đếm thời gian chờ mà phát hiện người thì thời gian chờ bị reset.
+o	Có thể thiết lập thời gian mở đèn tối thiểu (thời gian chờ), hoặc chuyển sang chế độ bật tắt thủ công, và có thể chọn hiệu ứng led blink, fading, hoặc tĩnh, điều chỉnh độ sáng tối đa (không được về 0).
+o	Server tự động lưu trữ và thống kê thời gian bật đèn.
+•	Nhóm Environment Control (Động cơ DC (quạt), cảm biến nhiệt độ độ ẩm DHT11):
+o	Thông tin nhiệt độ và độ ẩm sẽ được DHT11 đo định kỳ và gửi cho server để lưu trữ và thống kê.
+o	Nếu nhiệt độ hoặc độ ẩm vượt quá 1 giá trị giới hạn thì sẽ khởi động hệ thống quạt (tốc đô quạt có thể được điều chỉnh qua giao diện web app) và tự động tắt khi cả 2 giá trị trở lại trạng thái ổn định.
+o	Thời gian quạt bật cũng sẽ được server lưu trữ và thống kê (bật trong khoảng thời gian nào trong ngày, mỗi ngày bật bao lâu, …)
+•	Nhóm Monitoring & Data Platform:
+o	WebSocket realtime. 
+o	Dashboard. 
+o	Lưu lịch sử. 
+o	Biểu đồ. 
+o	Event timeline. 
+o	Offline/online synchronization.

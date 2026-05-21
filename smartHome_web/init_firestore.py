@@ -16,7 +16,7 @@ Script này sẽ tạo/cập nhật các document nền tảng:
 - webUsers/{admin username}
 - accessPasswords/master
 - schemaDocs/* để ghi chú cấu trúc các collection chính
-- dailyStats/{yyyy-mm-dd} để dashboard thống kê theo ngày
+- Log, event, dailyStats được lưu local trong logs/local, không ghi Firestore để tránh hết quota
 
 Yêu cầu:
     pip install firebase-admin python-dotenv bcrypt
@@ -24,7 +24,7 @@ Yêu cầu:
 Cách chạy:
     python init_firestore.py
 
-Tạo mock data thống kê 7 ngày:
+Tạo mock data thống kê local 30 ngày:
     python seed_mock_stats.py
 
 Xóa dữ liệu SmartHome cũ rồi seed lại:
@@ -119,11 +119,8 @@ SMART_HOME_COLLECTIONS = [
     "systemSettings",
     "webUsers",
     "accessPasswords",
-    "schemaDocs",
-    "events",
-    "dailyStats",
     "accessCards",
-    "systemState",
+    "schemaDocs",
 ]
 
 
@@ -236,8 +233,8 @@ def seed_documents(admin_user: tuple[str, Dict[str, Any]]) -> Dict[str, Dict[str
             "speed": 180,
             "temperatureOnThreshold": 32,
             "temperatureOffThreshold": 30,
-            "humidityOnThreshold": 75,
-            "humidityOffThreshold": 65,
+            "humidityOnThreshold": 40,
+            "humidityOffThreshold": 45,
             "updatedAt": server_timestamp(),
         },
         "devices/esp32": {
@@ -252,29 +249,11 @@ def seed_documents(admin_user: tuple[str, Dict[str, Any]]) -> Dict[str, Dict[str
             "configVersion": 1,
             "updatedAt": server_timestamp(),
         },
-        "systemState/current": {
-            "door": "CLOSED",
-            "temp": None,
-            "humidity": None,
-            "motion": False,
-            "gara": "CLOSED",
-            "garageMode": "AUTO",
-            "fan": "OFF",
-            "fanPct": 0,
-            "fanMode": "AUTO",
-            "light": False,
-            "lightMode": "AUTO",
-            "lightBrightness": 70,
-            "lightEffect": "static",
-            "lightHold": 20,
-            "dist": None,
-            "updatedAt": server_timestamp(),
-            "updatedAtIso": None,
-        },
         "systemSettings/main": {
             "systemName": "SmartHome ESP32",
             "timezone": os.getenv("APP_TIMEZONE", "Asia/Ho_Chi_Minh"),
             "configVersion": 1,
+            "autoCloseSeconds": 30,
             "accessLockout": {
                 "maxFailedAttempts": 3,
                 "initialLockSeconds": 30,
@@ -323,83 +302,13 @@ def seed_documents(admin_user: tuple[str, Dict[str, Any]]) -> Dict[str, Dict[str
             },
             "updatedAt": server_timestamp(),
         },
-        "schemaDocs/systemState": {
-            "collection": "systemState",
-            "document": "current",
-            "description": "Snapshot mới nhất của ESP32 để dashboard đọc nhanh. Server cập nhật có throttle; dashboard realtime vẫn nhận qua SSE.",
-            "example": {
-                "door": "CLOSED",
-                "temp": 31,
-                "humidity": 72,
-                "motion": True,
-                "gara": "CLOSED",
-                "garageMode": "AUTO",
-                "fan": "OFF",
-                "fanPct": 0,
-                "fanMode": "AUTO",
-                "light": True,
-                "lightMode": "AUTO",
-                "lightBrightness": 70,
-                "lightEffect": "static",
-                "lightHold": 20,
-                "dist": 18,
-            },
-            "updatedAt": server_timestamp(),
-        },
-        "schemaDocs/events": {
-            "collection": "events",
-            "description": "Lưu timeline nghiệp vụ quan trọng: truy cập, lockout, thay đổi quyền, cảnh báo. Không lưu dữ liệu cảm biến liên tục.",
-            "commonTypes": [
-                "access_success",
-                "access_failed",
-                "access_lockout",
-                "access_card_created",
-                "access_card_enrolled",
-                "access_card_deleted",
-                "access_password_created",
-                "web_login_failed",
-                "esp32_connected",
-                "esp32_disconnected",
-            ],
-            "updatedAt": server_timestamp(),
-        },
-        "schemaDocs/dailyStats": {
-            "collection": "dailyStats",
-            "description": "Một document mỗi ngày, đủ cho dashboard thống kê mà không cần lưu từng sample cảm biến.",
-            "example": {
-                "date": "2026-05-20",
-                "lightOnMinutes": 18,
-                "fanOnMinutes": 25,
-                "avgTemperature": 30.5,
-                "avgHumidity": 68,
-                "minTemperature": 27.8,
-                "maxTemperature": 35.2,
-                "lastTemperature": 31,
-                "lastHumidity": 70,
-                "statusUpdates": 300,
-                "unlocks": 4,
-                "failedAccess": 1,
-                "garageEvents": 2,
-                "lockouts": 0,
-                "anomalies": 0,
-                "hourly": {
-                    "00": {
-                        "sampleCount": 3,
-                        "tempSum": 87.6,
-                        "tempCount": 3,
-                        "humiditySum": 210,
-                        "humidityCount": 3,
-                        "avgTemperature": 29.2,
-                        "avgHumidity": 70,
-                        "lightOnMinutes": 4,
-                        "fanOnMinutes": 0,
-                        "unlocks": 0,
-                        "failedAccess": 0,
-                        "garageEvents": 0,
-                        "lockouts": 0,
-                        "anomalies": 0,
-                    }
-                },
+        "schemaDocs/localStorage": {
+            "storage": "local_files",
+            "description": "Log, event, status sample và dailyStats không lưu Firestore. Server đọc/ghi tại logs/local để tránh hết quota.",
+            "paths": {
+                "events": "logs/local/events/events-YYYY-MM-DD.jsonl",
+                "status": "logs/local/status/status-YYYY-MM-DD.jsonl",
+                "dailyStats": "logs/local/stats/daily-stats-YYYY-MM-DD.json",
             },
             "updatedAt": server_timestamp(),
         },
@@ -485,19 +394,24 @@ def reset_smart_home_collections(db: firestore.Client) -> None:
 
 
 def create_test_event(db: firestore.Client) -> None:
-    """Tạo một event kiểm tra kết nối."""
-    db.collection("events").add(
-        {
-            "type": "server_test",
-            "source": "init_firestore.py",
-            "target": "firebase",
-            "message": "Khởi tạo Firestore thành công",
-            "createdAt": server_timestamp(),
-            "metadata": {
-                "script": "init_firestore.py",
-            },
-        }
-    )
+    """Tạo một event kiểm tra local để xác nhận hệ thống log mới."""
+    import json
+    from datetime import datetime
+
+    log_dir = Path("logs/local/events")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now()
+    row = {
+        "id": f"init_{int(now.timestamp())}",
+        "type": "server_test",
+        "source": "init_firestore.py",
+        "target": "local_files",
+        "message": "Khởi tạo Firestore config thành công; log/stat dùng local file",
+        "createdAtIso": now.isoformat(timespec="seconds"),
+        "metadata": {"script": "init_firestore.py"},
+    }
+    with (log_dir / f"events-{now.date().isoformat()}.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def main() -> None:
@@ -521,7 +435,7 @@ def main() -> None:
     parser.add_argument(
         "--no-test-event",
         action="store_true",
-        help="Không tạo event kiểm tra trong collection events.",
+        help="Không tạo event kiểm tra trong file log local.",
     )
     parser.add_argument(
         "--admin-username",
@@ -561,7 +475,7 @@ def main() -> None:
         create_test_event(db)
 
     print("✅ Đã khởi tạo Firestore cho SmartHome ESP32.")
-    print("Các collection/document nền tảng đã được tạo hoặc cập nhật.")
+    print("Các collection/document nền tảng đã được tạo hoặc cập nhật. Log/stat dùng file local trong logs/local.")
     print(f"Web user mặc định: webUsers/{admin_user[0]}")
     if admin_password:
         print("Password web user đã được lưu bằng bcrypt hash.")
